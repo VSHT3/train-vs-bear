@@ -25,14 +25,20 @@ export function SimulationPlayback({
   const [paused, setPaused] = useState(replayMode);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [copied, setCopied] = useState(false);
+  const [shake, setShake] = useState(false);
+  const [zoneFlash, setZoneFlash] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
+  const lastHpRef = useRef(0);
+  const wasUnderFireRef = useRef(false);
 
   const frame = result.frames[Math.min(frameIndex, result.frames.length - 1)];
   const progress = Math.min((frame.km / payload.targetKm) * 100, 100);
-  const hpPercent = Math.max((frame.hp / payload.trainStats.maxHp) * 100, 0);
+  const maxHp = payload.trainStats.maxHp;
+  const hpPercent = Math.max((frame.hp / maxHp) * 100, 0);
   const visibleEvents = result.events.filter((event) => event.t <= frame.t + 0.01);
   const bearSide = payload.side === 'bear';
   const playerWon = bearSide ? result.outcome !== 'win' : result.outcome === 'win';
+  const dead = frame.hp <= 0;
 
   useEffect(() => {
     if (paused || finished) return;
@@ -49,10 +55,32 @@ export function SimulationPlayback({
   }, [finished, paused, playbackSpeed, result.frames.length]);
 
   useEffect(() => {
+    // Screen shake on big damage events
+    const hpDrop = lastHpRef.current - frame.hp;
+    if (hpDrop > maxHp * 0.2) {
+      setShake(true);
+      const timer = window.setTimeout(() => setShake(false), 300);
+      return () => window.clearTimeout(timer);
+    }
+    lastHpRef.current = frame.hp;
+  }, [frame.hp, frameIndex, maxHp]);
+
+  useEffect(() => {
+    // Zone entry flash
+    if (frame.underFire && !wasUnderFireRef.current) {
+      setZoneFlash(true);
+      const timer = window.setTimeout(() => setZoneFlash(false), 600);
+      return () => window.clearTimeout(timer);
+    }
+    wasUnderFireRef.current = frame.underFire;
+  }, [frame.underFire, frameIndex]);
+
+  useEffect(() => {
     if (!finished || !onDone) return;
-    const timeout = window.setTimeout(() => onDone(result), 1500);
+    const delay = dead ? 3000 : 1500;
+    const timeout = window.setTimeout(() => onDone(result), delay);
     return () => window.clearTimeout(timeout);
-  }, [finished, onDone, result]);
+  }, [finished, onDone, result, dead]);
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -80,7 +108,25 @@ export function SimulationPlayback({
   };
 
   return (
-    <div className="flex-1 flex flex-col p-6 gap-4 max-w-3xl mx-auto w-full">
+    <div className={`flex-1 flex flex-col p-6 gap-4 max-w-3xl mx-auto w-full ${shake ? 'animate-[shake_0.3s_ease-in-out]' : ''}`}>
+      <style>{`
+        @keyframes shake {
+          0%, 100% { transform: translateX(0); }
+          20% { transform: translateX(-6px); }
+          40% { transform: translateX(6px); }
+          60% { transform: translateX(-4px); }
+          80% { transform: translateX(4px); }
+        }
+        @keyframes fadeIn {
+          0% { opacity: 0; }
+          100% { opacity: 1; }
+        }
+      `}</style>
+
+      {dead && finished && (
+        <div className="fixed inset-0 z-50 pointer-events-none animate-[fadeIn_0.5s_ease-out_forwards] bg-red-900/40" />
+      )}
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="font-bold">{replayMode ? '🔁 Replay Viewer' : bearSide ? '🐻 Defend the Finish Line' : '🚂 Break Through the Defense'}</h2>
@@ -109,7 +155,7 @@ export function SimulationPlayback({
         </MetricCard>
       </div>
 
-      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4">
+      <div className={`bg-white dark:bg-zinc-900 border rounded-xl p-4 transition-colors duration-300 ${zoneFlash ? 'border-yellow-400 dark:border-yellow-500' : 'border-zinc-200 dark:border-zinc-800'}`}>
         <div className="relative h-14 bg-zinc-100 dark:bg-zinc-800 rounded-lg overflow-hidden">
           <div className={`absolute inset-y-0 left-0 ${bearSide ? 'bg-red-500/15' : 'bg-green-500/20'}`} style={{ width: `${progress}%` }} />
           {result.obstacles.map((obstacle) => (

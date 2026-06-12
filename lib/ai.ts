@@ -33,7 +33,7 @@ export async function generateBearPlan(
   ).join('\n');
 
   const result = await generateText({
-    model: 'deepseek/deepseek-v3.2',
+    model: 'google/gemini-2.5-flash',
     system: `You are the Bear Commander, a creative and slightly unhinged AI that designs obstacle courses to stop trains. You have access to a catalog of bear units and obstacles.
 
 You are facing a train with these stats:
@@ -152,7 +152,7 @@ export async function validateCustomUpgrade(
     .join(', ');
 
   const result = await generateText({
-    model: 'deepseek/deepseek-v3.2',
+    model: 'google/gemini-2.5-flash',
     system: `You are the Upgrade Arbiter — a stern but fair AI that evaluates custom train upgrades. You decide if a player's suggested upgrade is valid and how much it should cost.
 
 Context:

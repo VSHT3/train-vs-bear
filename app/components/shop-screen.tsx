@@ -8,6 +8,7 @@ import {
   canAffordMod,
   canAffordTrain,
 } from '@/lib/state';
+import { composeStats } from '@/lib/simulate';
 import type { BearUnitType, GameState, Mod, TrainStats } from '@/lib/types';
 
 type CustomResult = Mod | { valid: false; reason: string } | null;
@@ -50,11 +51,60 @@ function TrainShop({
   onReady,
 }: ShopScreenProps) {
   const [tab, setTab] = useState<'mods' | 'trains' | 'custom'>('mods');
+  const [previewMod, setPreviewMod] = useState<Mod | null>(null);
   const train = getTrain(state.trainId);
+
+  const withMod = (mod: Mod | null): TrainStats | null => {
+    if (!mod) return null;
+    const allMods = [...installedMods, ...state.customMods];
+    if (state.modIds.includes(mod.id)) return null;
+    return composeStats(train.base, [...allMods, mod]);
+  };
+  const previewStats = previewMod ? withMod(previewMod) : null;
+
+  const statDiffs: { label: string; key: keyof TrainStats; suffix: string; format: (v: number) => string }[] = [
+    { label: 'Speed', key: 'topSpeed', suffix: ' km/h', format: (v) => `${v}` },
+    { label: 'Accel', key: 'accel', suffix: ' km/h/s', format: (v) => `${v}` },
+    { label: 'HP', key: 'maxHp', suffix: '', format: (v) => `${v}` },
+    { label: 'Armor', key: 'armor', suffix: '%', format: (v) => `${Math.round(v * 100)}` },
+    { label: 'Plow', key: 'plow', suffix: ' t/s', format: (v) => `${v}` },
+    { label: 'Grip', key: 'grip', suffix: '%', format: (v) => `${Math.round(v * 100)}` },
+    { label: 'Weapon', key: 'energyWeapon', suffix: '', format: (v) => `${v}` },
+    { label: 'Regen', key: 'regen', suffix: ' hp/s', format: (v) => `${v}` },
+    { label: 'Heat Shield', key: 'heatShield', suffix: '%', format: (v) => `${Math.round(v * 100)}` },
+  ];
 
   return (
     <div className="flex-1 flex flex-col p-6 gap-6 max-w-3xl mx-auto w-full">
       <TrainCard state={state} stats={stats} installedMods={installedMods} onRemoveMod={onRemoveMod} />
+
+      {previewMod && previewStats && (
+        <div className="bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-xl p-4 text-sm">
+          <div className="font-semibold mb-2">{previewMod.emoji} {previewMod.name} — stat change preview</div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-1">
+            {statDiffs.map(({ label, key, format }) => {
+              const cur = stats[key];
+              const next = previewStats[key];
+              if (cur === next && !['armor', 'grip', 'heatShield'].includes(key) && next === 0) return null;
+              const diff = next - cur;
+              if (diff === 0 && !['armor', 'grip', 'heatShield'].includes(key)) return null;
+              return (
+                <div key={key} className="flex items-baseline gap-1">
+                  <span className="text-zinc-500">{label}:</span>
+                  <span className={diff > 0 ? 'text-green-600 font-medium' : diff < 0 ? 'text-red-500 font-medium' : ''}>
+                    {format(cur)} → {format(next)}
+                  </span>
+                  {diff !== 0 && (
+                    <span className={diff > 0 ? 'text-green-500 text-xs' : 'text-red-500 text-xs'}>
+                      ({diff > 0 ? '+' : ''}{diff > 0 ? format(diff) : format(diff)})
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="flex gap-2">
         {(['mods', 'trains', 'custom'] as const).map((item) => (
@@ -103,7 +153,14 @@ function TrainShop({
               <button
                 key={mod.id}
                 disabled={installed || !affordable}
-                onClick={() => onInstallMod(mod.id)}
+                onClick={() => {
+                  onInstallMod(mod.id);
+                  setPreviewMod(null);
+                }}
+                onMouseEnter={() => setPreviewMod(mod)}
+                onFocus={() => setPreviewMod(mod)}
+                onMouseLeave={() => setPreviewMod(null)}
+                onBlur={() => setPreviewMod(null)}
                 className={`text-left p-3 rounded-xl border ${installed ? 'border-green-500 bg-green-50 dark:bg-green-950/20' : affordable ? 'border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900' : 'border-zinc-200 opacity-45'}`}
               >
                 <div className="flex justify-between gap-3">

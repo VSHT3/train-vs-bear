@@ -78,6 +78,9 @@ export function IntelScreen({
           {displayedOdds !== null && odds && (
             <div className={`p-4 rounded-xl border text-center ${displayedOdds >= 60 ? 'border-green-500 bg-green-50 dark:bg-green-950/20' : displayedOdds >= 30 ? 'border-yellow-500 bg-yellow-50 dark:bg-yellow-950/20' : 'border-red-500 bg-red-50 dark:bg-red-950/20'}`}>
               <div className="text-3xl font-black">{displayedOdds}%</div>
+              <div className="text-sm font-semibold mt-0.5">
+                {displayedOdds >= 80 ? '🟢 FAVORED' : displayedOdds >= 60 ? '🟢 GOOD CHANCE' : displayedOdds >= 40 ? '🟡 EVEN' : displayedOdds >= 20 ? '🔴 UNLIKELY' : '🔴 LONG SHOT'}
+              </div>
               <div className="text-sm text-zinc-500">estimated {bearSide ? 'defense hold' : 'train win'} chance · {odds.runs} seeded runs</div>
             </div>
           )}
