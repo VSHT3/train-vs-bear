@@ -1,5 +1,29 @@
 import { generateText, Output } from 'ai';
 import { z } from 'zod/v4';
+
+// Tried in order — free-tier gateway rate limits hit per model, so falling
+// through to another provider keeps live AI alive before the preset fallback.
+const AI_MODELS = ['google/gemini-2.5-flash', 'anthropic/claude-haiku-4.5', 'openai/gpt-4o-mini'];
+
+async function generateWithFallback<T>(opts: {
+  system: string;
+  prompt: string;
+  output: ReturnType<typeof Output.object>;
+  temperature?: number;
+  maxOutputTokens?: number;
+}): Promise<T> {
+  let lastError: unknown;
+  for (const model of AI_MODELS) {
+    try {
+      const result = await generateText({ ...opts, model });
+      return result.output as T;
+    } catch (error) {
+      lastError = error;
+      console.error(`[ai] model ${model} failed:`, error instanceof Error ? error.message : error);
+    }
+  }
+  throw lastError;
+}
 import type { BearPlan, BearPlacement, BearUnitType, Mod, ModFlag, TrainStats } from './types';
 import { BEAR_UNITS, bearBudgetForRound, MODS } from './catalog';
 import { createSeededRandom, type Seed } from './random';
@@ -32,8 +56,7 @@ export async function generateBearPlan(
     `${spec.emoji} ${spec.name} (${type}) — cost:${spec.cost}ea, ${spec.kind}, ${spec.desc}`
   ).join('\n');
 
-  const result = await generateText({
-    model: 'google/gemini-2.5-flash',
+  const raw = await generateWithFallback<{ name: string; taunt: string; strategy: string; placements: Array<{ type: string; atKm: number; count: number }> }>({
     system: `You are the Bear Commander, a creative and slightly unhinged AI that designs obstacle courses to stop trains. You have access to a catalog of bear units and obstacles.
 
 You are facing a train with these stats:
@@ -76,10 +99,10 @@ Return a JSON object with:
 - placements: array of { type (exact BearUnitType string), atKm (number), count (number) }`,
     output: Output.object({ schema: bearPlanSchema }),
     temperature: 0.9,
-    maxOutputTokens: 2000,
+    // Thinking models (gemini-2.5) spend output budget on reasoning before
+    // emitting JSON — a tight cap yields "No output generated".
+    maxOutputTokens: 6000,
   });
-
-  const raw = result.output as { name: string; taunt: string; strategy: string; placements: Array<{ type: string; atKm: number; count: number }> };
 
   // Validate and sanitize placements
   const validPlacements: BearPlacement[] = raw.placements
@@ -151,8 +174,17 @@ export async function validateCustomUpgrade(
     .map((m) => m!.name)
     .join(', ');
 
-  const result = await generateText({
-    model: 'google/gemini-2.5-flash',
+  const raw = await generateWithFallback<{
+    valid: boolean;
+    name?: string;
+    emoji?: string;
+    desc?: string;
+    coins?: number;
+    points?: number;
+    reason?: string;
+    effects?: Partial<TrainStats>;
+    flags?: string[];
+  }>({
     system: `You are the Upgrade Arbiter — a stern but fair AI that evaluates custom train upgrades. You decide if a player's suggested upgrade is valid and how much it should cost.
 
 Context:
@@ -161,7 +193,13 @@ Context:
 - The game has trains, bears, explosives, lava whales, honey, drones, etc.
 - Upgrades should be creative but NOT game-breaking (no "instant win", "teleport", "invincibility")
 - Stats have these ranges: topSpeed 0-600, accel 0-30, maxHp 0-5000, armor 0-0.8, plow 0-200, grip 0-1, heatShield 0-1, energyWeapon 0-80, regen 0-10
-- ModFlags available: droneJammer, mineSweeper, acidProof, bearWhisperer, gooseRepellent
+- ModFlags available: droneJammer (drones can't hit), mineSweeper (mines mostly bypassed), acidProof (acid cube damage halved), bearWhisperer (some bears wander off), gooseRepellent (geese ignored)
+
+CRITICAL: every approved upgrade MUST have at least one concrete game effect — a non-zero stat delta in "effects" and/or a flag in "flags". Pure flavor with no mechanics is useless in the simulation. Translate flavor creatively into mechanics:
+- "a cute kitten" → bearWhisperer flag (bears get distracted) or small regen (morale)
+- "racing stripes" → small topSpeed boost
+- "cup holders" → small maxHp (crew morale = better maintenance)
+Effect sizes are DELTAS added to the train's stats, and are clamped server-side to: topSpeed ±100, accel ±8, maxHp ±800, armor ±0.15, plow ±40, grip ±0.4, heatShield ±0.4, energyWeapon ±30, regen ±5. Price must match the mechanical power you grant, not the flavor.
 
 Pricing guidelines:
 - Small stat boost (e.g. +5 topSpeed, +0.05 armor): 100-200 coins, 0-1 points
@@ -180,27 +218,16 @@ Evaluate it and return a JSON object:
   - desc: funny one-line description (max 120 chars)
   - coins: cost in coins
   - points: cost in upgrade points (0-3)
-  - effects: stat changes (only include stats that change)
+  - effects: stat DELTAS (only include stats that change; at least one non-zero entry unless a flag is given)
   - flags: any ModFlag strings that apply
 - If invalid:
   - valid: false
   - reason: short explanation why it was rejected`,
     output: Output.object({ schema: customModSchema }),
     temperature: 0.7,
-    maxOutputTokens: 800,
+    // Headroom for thinking models — see note in generateBearPlan.
+    maxOutputTokens: 4000,
   });
-
-  const raw = result.output as {
-    valid: boolean;
-    name?: string;
-    emoji?: string;
-    desc?: string;
-    coins?: number;
-    points?: number;
-    reason?: string;
-    effects?: Partial<TrainStats>;
-    flags?: string[];
-  };
 
   if (!raw.valid || !raw.name) {
     return { valid: false, reason: raw.reason ?? 'The Upgrade Arbiter was not impressed.' };
@@ -208,18 +235,49 @@ Evaluate it and return a JSON object:
 
   const validFlags: ModFlag[] = ['droneJammer', 'mineSweeper', 'acidProof', 'bearWhisperer', 'gooseRepellent'];
   const flags = (raw.flags ?? []).filter((f): f is ModFlag => validFlags.includes(f as ModFlag));
+  const effects = clampEffects(raw.effects ?? {});
+
+  if (Object.keys(effects).length === 0 && flags.length === 0) {
+    return {
+      valid: false,
+      reason: 'The Arbiter loved the idea but found no measurable effect on the train. Pitch it with some mechanical teeth.',
+    };
+  }
 
   return {
     id: `custom-${Date.now()}`,
     name: raw.name.slice(0, 40),
     emoji: (raw.emoji ?? '🔧').slice(0, 2),
     desc: raw.desc?.slice(0, 120) ?? 'A custom upgrade of questionable legality.',
-    coins: Math.min(Math.max(raw.coins ?? 200, 50), 1000),
-    points: Math.min(Math.max(raw.points ?? 1, 0), 3),
-    effects: raw.effects ?? {},
+    coins: Math.min(Math.max(Math.round(raw.coins ?? 200), 50), 1000),
+    points: Math.min(Math.max(Math.round(raw.points ?? 1), 0), 3),
+    effects,
     flags: flags.length > 0 ? flags : undefined,
     custom: true,
   };
+}
+
+// Max absolute per-stat delta an AI-approved upgrade may grant.
+const EFFECT_CLAMPS: Record<keyof TrainStats, number> = {
+  topSpeed: 100,
+  accel: 8,
+  maxHp: 800,
+  armor: 0.15,
+  plow: 40,
+  grip: 0.4,
+  heatShield: 0.4,
+  energyWeapon: 30,
+  regen: 5,
+};
+
+function clampEffects(effects: Partial<TrainStats>): Partial<TrainStats> {
+  const clamped: Partial<TrainStats> = {};
+  for (const [key, limit] of Object.entries(EFFECT_CLAMPS) as Array<[keyof TrainStats, number]>) {
+    const value = effects[key];
+    if (typeof value !== 'number' || !Number.isFinite(value) || value === 0) continue;
+    clamped[key] = Math.min(Math.max(value, -limit), limit);
+  }
+  return clamped;
 }
 
 // ---- GENERATE PRESET BEAR PLAN (offline fallback) ----

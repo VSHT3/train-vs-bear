@@ -17,7 +17,8 @@ export async function getBearPlan(
 ): Promise<BearPlan> {
   try {
     return await generateBearPlan(round, trainStats, modNames, targetKm, playerLostLast);
-  } catch {
+  } catch (error) {
+    console.error('[ai] bear plan generation failed, using preset:', error instanceof Error ? error.message : error);
     return generatePresetPlan(round, targetKm, playerLostLast, seed);
   }
 }
@@ -38,7 +39,8 @@ export async function evaluateCustomUpgrade(
 ): Promise<Mod | { valid: false; reason: string }> {
   try {
     return await validateCustomUpgrade(description, round, existingMods);
-  } catch {
+  } catch (error) {
+    console.error('[ai] custom upgrade validation failed:', error instanceof Error ? error.message : error);
     return { valid: false, reason: 'The Upgrade Arbiter is currently on lunch break. Try again later.' };
   }
 }

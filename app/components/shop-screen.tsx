@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { BEAR_UNITS, MODS, TRAINS, getTrain, targetKmForRound } from '@/lib/catalog';
+import { BEAR_UNITS, MAX_CUSTOM_MODS, MODS, TRAINS, getTrain, targetKmForRound } from '@/lib/catalog';
 import {
   bearBudgetRemaining,
   canAffordBearUnit,
@@ -9,7 +9,27 @@ import {
   canAffordTrain,
 } from '@/lib/state';
 import { composeStats } from '@/lib/simulate';
-import type { BearUnitType, GameState, Mod, TrainStats } from '@/lib/types';
+import type { BearUnitType, GameState, Mod, ModFlag, TrainStats } from '@/lib/types';
+
+const FLAG_LABELS: Record<ModFlag, string> = {
+  droneJammer: '📡 Drone Jammer',
+  mineSweeper: '🧹 Mine Sweeper',
+  acidProof: '🧪 Acid-Proof',
+  bearWhisperer: '📯 Bear Whisperer',
+  gooseRepellent: '🦢 Goose Repellent',
+};
+
+const EFFECT_LABELS: Record<keyof TrainStats, { label: string; format: (v: number) => string }> = {
+  topSpeed: { label: 'Speed', format: (v) => `${v > 0 ? '+' : ''}${v} km/h` },
+  accel: { label: 'Accel', format: (v) => `${v > 0 ? '+' : ''}${v} km/h/s` },
+  maxHp: { label: 'HP', format: (v) => `${v > 0 ? '+' : ''}${v}` },
+  armor: { label: 'Armor', format: (v) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}%` },
+  plow: { label: 'Plow', format: (v) => `${v > 0 ? '+' : ''}${v} t/s` },
+  grip: { label: 'Grip', format: (v) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}%` },
+  heatShield: { label: 'Heat Shield', format: (v) => `${v > 0 ? '+' : ''}${Math.round(v * 100)}%` },
+  energyWeapon: { label: 'Weapon', format: (v) => `${v > 0 ? '+' : ''}${v} dps` },
+  regen: { label: 'Regen', format: (v) => `${v > 0 ? '+' : ''}${v} hp/s` },
+};
 
 type CustomResult = Mod | { valid: false; reason: string } | null;
 
@@ -193,11 +213,41 @@ function TrainShop({
               {'valid' in customResult && !customResult.valid ? (
                 <p className="text-red-500">{customResult.reason}</p>
               ) : 'id' in customResult ? (
-                <div className="space-y-2">
-                  <strong>{customResult.emoji} {customResult.name}</strong>
-                  <p className="text-sm text-zinc-500">{customResult.desc}</p>
-                  <button onClick={onConfirmCustom} className="px-4 py-2 rounded-lg bg-green-600 text-white text-sm">Install upgrade</button>
-                </div>
+                (() => {
+                  const effectEntries = (Object.entries(customResult.effects) as Array<[keyof TrainStats, number]>).filter(([, v]) => v !== 0);
+                  const affordable = state.coins >= customResult.coins && state.points >= customResult.points;
+                  const slotsFull = state.customMods.length >= MAX_CUSTOM_MODS;
+                  return (
+                    <div className="space-y-2">
+                      <div className="flex justify-between gap-3">
+                        <strong>{customResult.emoji} {customResult.name}</strong>
+                        <span className="text-sm text-amber-500 shrink-0">🪙{customResult.coins} {customResult.points > 0 ? `⭐${customResult.points}` : ''}</span>
+                      </div>
+                      <p className="text-sm text-zinc-500">{customResult.desc}</p>
+                      <div className="flex flex-wrap gap-1.5 text-xs">
+                        {effectEntries.map(([key, value]) => (
+                          <span key={key} className={`px-2 py-0.5 rounded-full border ${value > 0 ? 'border-green-300 text-green-600 dark:border-green-800' : 'border-red-300 text-red-500 dark:border-red-800'}`}>
+                            {EFFECT_LABELS[key].label} {EFFECT_LABELS[key].format(value)}
+                          </span>
+                        ))}
+                        {(customResult.flags ?? []).map((flag) => (
+                          <span key={flag} className="px-2 py-0.5 rounded-full border border-purple-300 text-purple-600 dark:border-purple-800">
+                            {FLAG_LABELS[flag]}
+                          </span>
+                        ))}
+                      </div>
+                      <button
+                        onClick={onConfirmCustom}
+                        disabled={!affordable || slotsFull}
+                        className="px-4 py-2 rounded-lg bg-green-600 text-white text-sm disabled:opacity-50"
+                      >
+                        Install for 🪙{customResult.coins}{customResult.points > 0 ? ` + ⭐${customResult.points}` : ''}
+                      </button>
+                      {slotsFull && <p className="text-xs text-red-500">Custom upgrade limit reached ({MAX_CUSTOM_MODS}).</p>}
+                      {!slotsFull && !affordable && <p className="text-xs text-red-500">Not enough {state.coins < customResult.coins ? 'coins' : 'upgrade points'}.</p>}
+                    </div>
+                  );
+                })()
               ) : null}
             </div>
           )}
