@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TrainStats } from './types';
 import { composeStats, runSimulation } from './simulate';
+import { normalizeSeed } from './random';
 
 const train: TrainStats = {
   topSpeed: 120,
@@ -119,5 +120,11 @@ describe('runSimulation', () => {
 describe('composeStats', () => {
   it('clamps armor upgrades to 80 percent', () => {
     expect(composeStats(train, [{ effects: { armor: 2 } }]).armor).toBe(0.8);
+  });
+});
+
+describe('replay seeds', () => {
+  it('preserves numeric seeds when they round-trip through a share URL', () => {
+    expect(normalizeSeed('2615462800')).toBe(2615462800);
   });
 });

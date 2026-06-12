@@ -49,7 +49,7 @@ export function createGame(seed: Seed = 'train-vs-bear'): GameState {
   };
 }
 
-export function startGame(side: PlayerSide, seed: Seed = Date.now()): GameState {
+export function startGame(side: PlayerSide, seed: Seed = 'train-vs-bear'): GameState {
   const state = createGame(seed);
   const loadout = side === 'bear' ? trainLoadoutForRound(1) : null;
   return {
@@ -216,7 +216,7 @@ export function finishRun(state: GameState, sim: SimResult): GameState {
 
   const newHearts = playerWon ? state.hearts : state.hearts - 1;
   let nextPhase: Phase;
-  if (newHearts <= 0) {
+  if (newHearts <= 0 || (state.round >= MAX_ROUNDS && !playerWon)) {
     nextPhase = 'gameover';
   } else if (state.round >= MAX_ROUNDS && playerWon) {
     nextPhase = 'victory';
@@ -253,7 +253,6 @@ export function nextRound(state: GameState): GameState {
     plan: null,
     odds: null,
     sim: null,
-    lastSummary: null,
   };
 }
 

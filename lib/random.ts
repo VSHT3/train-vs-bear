@@ -5,6 +5,10 @@ export function normalizeSeed(seed: Seed | undefined): number {
     return seed >>> 0;
   }
 
+  if (typeof seed === 'string' && /^\d+$/.test(seed.trim())) {
+    return Number(seed) >>> 0;
+  }
+
   const value = seed ?? 'train-vs-bear';
   let hash = 2166136261;
   for (const char of String(value)) {
