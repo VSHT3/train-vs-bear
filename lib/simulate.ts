@@ -10,6 +10,7 @@ interface LiveObstacle extends SimObstacle {
   totalMass: number;
   initialCount: number;
   done: boolean;
+  damageDealt: number; // accumulated damage from this obstacle
 }
 
 export function runSimulation(
@@ -39,6 +40,7 @@ export function runSimulation(
         totalMass: isBlocker ? (spec.mass ?? 0) * p.count : 0,
         initialCount: p.count,
         done: false,
+        damageDealt: 0,
       };
     })
     .sort((a, b) => a.km - b.km);
@@ -61,6 +63,7 @@ export function runSimulation(
   // Obstacle encounters & zone entry tracking
   const encounters: ObstacleEncounter[] = [];
   const enteredZones = new Set<number>();
+  const zoneDamageAccum = new Map<number, number>(); // obstacle id -> accumulated zone dps damage
 
   const frames: SimFrame[] = [];
   const events: SimEvent[] = [];
@@ -157,10 +160,8 @@ export function runSimulation(
         totalSticky += spec.stickiness * obs.count;
       }
 
-      // Mines (polarMinefield)
+      // Mines (polarMinefield) — tracked per-zone
       if (spec.minesPerKm && spec.mineDamage && !hasFlag('mineSweeper')) {
-        // Deterministic mine check: expected hits per tick = minesPerKm * (speed_km/s) * dt
-        // Use distance moved as basis so it's proportional to travel
         const distKm = (speed / 3600) * dt;
         const expectedHits = spec.minesPerKm * obs.count * distKm;
         if (expectedHits > 0 && random() < expectedHits) {
@@ -168,6 +169,7 @@ export function runSimulation(
           hp -= dmg;
           totalDamage += dmg;
           mineDmg += dmg;
+          obs.damageDealt += dmg;
           events.push({
             t: Math.round(t * 10) / 10,
             km: Math.round(km * 1000) / 1000,
@@ -178,12 +180,24 @@ export function runSimulation(
       }
     }
 
-    // Apply zone DPS
+    // Apply zone DPS — distribute proportionally across active zones
     if (zoneDps > 0) {
       const dmg = zoneDps * dt;
       hp -= dmg;
       totalDamage += dmg;
       zoneDmg += dmg;
+      // Distribute to each active zone proportionally
+      if (zoneDps > 0) {
+        for (const obs of live) {
+          if (obs.done || obs.kind !== 'zone') continue;
+          if (km < obs.km || km > obs.km + obs.lengthKm) continue;
+          const spec = BEAR_UNITS[obs.type];
+          if (!spec.zoneDps) continue;
+          if (obs.type === 'droneSwarm' && hasFlag('droneJammer')) continue;
+          const share = ((spec.zoneDps * obs.count) / zoneDps) * dmg;
+          obs.damageDealt += share;
+        }
+      }
     }
 
     // 2. Compute effective top speed (sticky reduction)
@@ -303,6 +317,7 @@ export function runSimulation(
           hp -= actual;
           totalDamage += actual;
           impactDmg += actual;
+          obs.damageDealt += actual;
 
           events.push({
             t: Math.round(t * 10) / 10,
@@ -361,6 +376,7 @@ export function runSimulation(
         hp -= dmg;
         totalDamage += dmg;
         grindDmg += dmg;
+        grinding.damageDealt += dmg;
       }
 
       // Block cleared?
@@ -467,6 +483,32 @@ function buildResult(
     contactT: o.contactT,
     clearedT: o.clearedT,
   }));
+
+  // Sync actual damage values into encounters (obstacle damageDealt tracks real accumulated damage)
+  const syncDamage = new Map<string, number>();
+  for (const o of live) {
+    syncDamage.set(`${o.type}-${o.km}`, o.damageDealt);
+  }
+  for (const enc of encounters) {
+    const key = `${enc.type}-${enc.atKm}`;
+    const d = syncDamage.get(key);
+    if (d !== undefined && d > 0) {
+      enc.damageTaken = Math.round(d);
+    }
+  }
+
+  // Identify killer obstacle (most damage)
+  let killerIndex = -1;
+  let maxDmg = 0;
+  for (let i = 0; i < encounters.length; i++) {
+    if (encounters[i].damageTaken > maxDmg && encounters[i].outcome !== 'vaporized' && encounters[i].outcome !== 'bypassed') {
+      maxDmg = encounters[i].damageTaken;
+      killerIndex = i;
+    }
+  }
+  if (killerIndex >= 0) {
+    encounters[killerIndex].outcome = 'killer';
+  }
 
   return {
     seed,

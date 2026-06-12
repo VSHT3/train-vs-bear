@@ -45,6 +45,7 @@ export function createGame(seed: Seed = 'train-vs-bear'): GameState {
     lastSummary: null,
     totalBearsSmashed: 0,
     totalKm: 0,
+    freeplay: false,
   };
 }
 
@@ -214,7 +215,11 @@ export function finishRun(state: GameState, sim: SimResult): GameState {
 
   const newHearts = playerWon ? state.hearts : state.hearts - 1;
   let nextPhase: Phase;
-  if (newHearts <= 0 || (state.round >= MAX_ROUNDS && !playerWon)) {
+  if (newHearts <= 0) {
+    nextPhase = 'gameover';
+  } else if (state.freeplay) {
+    nextPhase = 'result';
+  } else if (state.round >= MAX_ROUNDS && !playerWon) {
     nextPhase = 'gameover';
   } else if (state.round >= MAX_ROUNDS && playerWon) {
     nextPhase = 'victory';
@@ -236,7 +241,7 @@ export function finishRun(state: GameState, sim: SimResult): GameState {
 }
 
 export function nextRound(state: GameState): GameState {
-  if (state.round >= MAX_ROUNDS) return state;
+  if (!state.freeplay && state.round >= MAX_ROUNDS) return state;
   const round = state.round + 1;
   const loadout = state.side === 'bear' ? trainLoadoutForRound(round) : null;
   return {
@@ -256,6 +261,21 @@ export function nextRound(state: GameState): GameState {
 
 export function dismissRoundIntro(state: GameState): GameState {
   return { ...state, phase: 'shop' };
+}
+
+export function enterFreeplay(state: GameState): GameState {
+  return {
+    ...state,
+    freeplay: true,
+    round: MAX_ROUNDS + 1,
+    phase: 'roundIntro',
+    hearts: MAX_HEARTS,
+    bearPlacements: [],
+    bearBudget: bearBudgetForRound(MAX_ROUNDS + 1, false),
+    plan: null,
+    odds: null,
+    sim: null,
+  };
 }
 
 // ---- HELPERS ----
@@ -307,12 +327,18 @@ export type GameAction =
   | { type: 'nextRound' }
   | { type: 'dismissRoundIntro' }
   | { type: 'placeBearUnit'; unitType: BearUnitType; atKm: number }
-  | { type: 'removeBearPlacement'; index: number };
+  | { type: 'removeBearPlacement'; index: number }
+  | { type: 'restoreGame'; state: GameState }
+  | { type: 'enterFreeplay' };
 
 export function gameReducer(state: GameState, action: GameAction): GameState {
   switch (action.type) {
     case 'startGame':
       return startGame(action.side, action.seed);
+    case 'restoreGame':
+      return action.state;
+    case 'enterFreeplay':
+      return enterFreeplay(state);
     case 'buyTrain':
       return buyTrain(state, action.trainId) ?? state;
     case 'installMod':

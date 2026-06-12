@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { BEAR_UNITS } from '@/lib/catalog';
 import { encodeReplay } from '@/lib/replay';
+import { useSound } from '@/lib/sound';
 import type { ReplayPayload, SimResult } from '@/lib/types';
 
 const PLAYBACK_SPEEDS = [1, 2, 3, 5] as const;
@@ -25,11 +26,8 @@ export function SimulationPlayback({
   const [paused, setPaused] = useState(replayMode);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [copied, setCopied] = useState(false);
-  const [shake, setShake] = useState(false);
-  const [zoneFlash, setZoneFlash] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
-  const lastHpRef = useRef(0);
-  const wasUnderFireRef = useRef(false);
+  const { play: playSound } = useSound();
 
   const frame = result.frames[Math.min(frameIndex, result.frames.length - 1)];
   const progress = Math.min((frame.km / payload.targetKm) * 100, 100);
@@ -39,6 +37,10 @@ export function SimulationPlayback({
   const bearSide = payload.side === 'bear';
   const playerWon = bearSide ? result.outcome !== 'win' : result.outcome === 'win';
   const dead = frame.hp <= 0;
+  const trackSpeed = payload.trainStats.topSpeed > 0 ? frame.speed / payload.trainStats.topSpeed : 0;
+
+  const eventsAtFrame = result.events.filter((e) => Math.abs(e.t - frame.t) < 0.15);
+  const justHit = eventsAtFrame.some((e) => e.kind === 'hit' || e.kind === 'boom');
 
   useEffect(() => {
     if (paused || finished) return;
@@ -55,25 +57,21 @@ export function SimulationPlayback({
   }, [finished, paused, playbackSpeed, result.frames.length]);
 
   useEffect(() => {
-    // Screen shake on big damage events
-    const hpDrop = lastHpRef.current - frame.hp;
-    if (hpDrop > maxHp * 0.2) {
-      setShake(true);
-      const timer = window.setTimeout(() => setShake(false), 300);
-      return () => window.clearTimeout(timer);
-    }
-    lastHpRef.current = frame.hp;
-  }, [frame.hp, frameIndex, maxHp]);
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [frameIndex]);
 
+  // Play sounds for events
+  const lastEventCount = useRef(0);
   useEffect(() => {
-    // Zone entry flash
-    if (frame.underFire && !wasUnderFireRef.current) {
-      setZoneFlash(true);
-      const timer = window.setTimeout(() => setZoneFlash(false), 600);
-      return () => window.clearTimeout(timer);
+    if (visibleEvents.length > lastEventCount.current) {
+      const newEvents = visibleEvents.slice(lastEventCount.current);
+      for (const e of newEvents) {
+        if (e.kind === 'hit' || e.kind === 'boom') playSound('crash');
+        else if (e.kind === 'info' && e.text.includes('Entered')) playSound('zone');
+      }
     }
-    wasUnderFireRef.current = frame.underFire;
-  }, [frame.underFire, frameIndex]);
+    lastEventCount.current = visibleEvents.length;
+  }, [visibleEvents, playSound]);
 
   useEffect(() => {
     if (!finished || !onDone) return;
@@ -83,17 +81,31 @@ export function SimulationPlayback({
   }, [finished, onDone, result, dead]);
 
   useEffect(() => {
-    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [frameIndex]);
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === ' ' || event.key === 'k') {
+        event.preventDefault();
+        setPaused((p) => !p);
+      }
+      if (event.key === 'ArrowRight') setFrameIndex((i) => Math.min(i + 1, result.frames.length - 1));
+      if (event.key === 'ArrowLeft') setFrameIndex((i) => Math.max(i - 1, 0));
+      if (event.key === 'r') {
+        setPaused(true);
+        setFinished(false);
+        setFrameIndex(0);
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [result.frames.length]);
 
-  const shareReplay = async () => {
+  const shareReplay = useCallback(async () => {
     const url = new URL(window.location.href);
     url.pathname = '/';
     url.search = '';
     url.searchParams.set('replay', encodeReplay(payload));
     await navigator.clipboard.writeText(url.toString());
     setCopied(true);
-  };
+  }, [payload]);
 
   const scrubTo = (nextFrame: number) => {
     setPaused(true);
@@ -101,106 +113,227 @@ export function SimulationPlayback({
     setFinished(nextFrame >= result.frames.length - 1);
   };
 
-  const restart = () => {
-    setPaused(true);
-    setFinished(false);
-    setFrameIndex(0);
-  };
+  const hpColor = hpPercent > 50 ? 'bg-green-500' : hpPercent > 25 ? 'bg-yellow-500' : 'bg-red-500';
 
   return (
-    <div className={`flex-1 flex flex-col p-6 gap-4 max-w-5xl mx-auto w-full ${shake ? 'animate-[shake_0.3s_ease-in-out]' : ''}`}>
-      <style>{`
-        @keyframes shake {
-          0%, 100% { transform: translateX(0); }
-          20% { transform: translateX(-6px); }
-          40% { transform: translateX(6px); }
-          60% { transform: translateX(-4px); }
-          80% { transform: translateX(4px); }
-        }
-        @keyframes fadeIn {
-          0% { opacity: 0; }
-          100% { opacity: 1; }
-        }
-      `}</style>
+    <div className="flex-1 flex flex-col p-4 sm:p-6 gap-4 max-w-5xl mx-auto w-full relative overflow-hidden">
+      {dead && finished && <div className="fixed inset-0 z-50 pointer-events-none animate-fade-in bg-red-900/40" />}
 
-      {dead && finished && (
-        <div className="fixed inset-0 z-50 pointer-events-none animate-[fadeIn_0.5s_ease-out_forwards] bg-red-900/40" />
-      )}
+      <style>{`
+        @keyframes fade-in { 0% { opacity: 0; } 100% { opacity: 1; } }
+        @keyframes rail-scroll { 0% { background-position: 0 0; } 100% { background-position: -24px 0; } }
+        @keyframes pulse-glow { 0%, 100% { box-shadow: 0 0 8px rgba(34,197,94,0.3); } 50% { box-shadow: 0 0 20px rgba(34,197,94,0.6); } }
+        @keyframes speed-line { 0% { opacity: 0; transform: translateX(0); } 50% { opacity: 0.5; } 100% { opacity: 0; transform: translateX(-60px); } }
+        @keyframes shake { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-5px); } 40% { transform: translateX(5px); } 60% { transform: translateX(-3px); } 80% { transform: translateX(3px); } }
+        @keyframes slide-up { 0% { opacity: 0; transform: translateY(8px); } 100% { opacity: 1; transform: translateY(0); } }
+        @keyframes damage-flash { 0% { filter: brightness(1); } 25% { filter: brightness(1.5) saturate(0); } 50% { filter: brightness(0.6) saturate(2); } 100% { filter: brightness(1); } }
+      `}</style>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="font-bold">{replayMode ? '🔁 Replay Viewer' : bearSide ? '🐻 Defend the Finish Line' : '🚂 Break Through the Defense'}</h2>
+          <h2 className="font-bold text-lg">{replayMode ? '🔁 Replay' : bearSide ? '🐻 DEFENSE RUN' : '🚂 TRAIN RUN'}</h2>
           <p className="text-xs text-zinc-400">
-            Round {payload.round} · {payload.train.emoji} {payload.train.name} · run seed {result.seed}
+            Round {payload.round} · {payload.train.emoji} {payload.train.name} · seed {result.seed}
           </p>
         </div>
         <div className="flex gap-2">
-          {replayMode && <button onClick={onExit} className="px-3 py-1.5 text-xs border border-zinc-200 dark:border-zinc-700 rounded-lg">New game</button>}
-          <button onClick={shareReplay} className="px-3 py-1.5 text-xs border border-zinc-200 dark:border-zinc-700 rounded-lg">{copied ? 'Replay link copied' : 'Share replay'}</button>
+          {replayMode && <button onClick={onExit} className="px-3 py-1.5 text-xs border border-zinc-200 dark:border-zinc-700 rounded-lg">Exit replay</button>}
+          <button onClick={shareReplay} className="px-3 py-1.5 text-xs border border-zinc-200 dark:border-zinc-700 rounded-lg">{copied ? 'Link copied!' : 'Share replay'}</button>
         </div>
       </div>
 
       {replayMode && (
         <div className="bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-xl p-3 text-sm text-blue-700 dark:text-blue-300">
-          This replay contains the exact train stats, flags, bear plan, perspective, target distance, and simulation seed.
+          Exact replay — train stats, flags, bear plan, perspective, distance, and simulation seed are preserved.
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-4">
-        <MetricCard label="Train speed" value={`${frame.speed} km/h`} alert={frame.grinding || frame.sticky > 0}>
-          {frame.grinding ? 'Grinding through defense' : frame.sticky > 0 ? `${Math.round(frame.sticky * 100)}% slowed` : 'Clear track'}
-        </MetricCard>
-        <MetricCard label="Train integrity" value={`${frame.hp}/${payload.trainStats.maxHp}`} alert={hpPercent < 30}>
-          <div className="h-2 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden mt-2"><div className={`h-full ${hpPercent > 50 ? 'bg-green-500' : hpPercent > 25 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${hpPercent}%` }} /></div>
-        </MetricCard>
-      </div>
+      {/* === TRACK VISUALIZATION === */}
+      <div className={`bg-white dark:bg-zinc-900 border rounded-xl overflow-hidden transition-colors ${dead && finished ? 'border-red-400' : 'border-zinc-200 dark:border-zinc-800'}`}>
+        {/* Speed lines */}
+        {frame.speed > 80 && (
+          <div className="absolute inset-0 pointer-events-none overflow-hidden">
+            {[...Array(3)].map((_, i) => (
+              <div key={i} className="absolute h-px bg-zinc-300 dark:bg-zinc-600" style={{ top: `${20 + i * 30}%`, animation: `speed-line ${0.3 / trackSpeed}s linear infinite`, animationDelay: `${i * 0.1}s` }} />
+            ))}
+          </div>
+        )}
 
-      <div className={`bg-white dark:bg-zinc-900 border rounded-xl p-4 transition-colors duration-300 ${zoneFlash ? 'border-yellow-400 dark:border-yellow-500' : 'border-zinc-200 dark:border-zinc-800'}`}>
-        <div className="relative h-14 bg-zinc-100 dark:bg-zinc-800 rounded-lg overflow-hidden">
-          <div className={`absolute inset-y-0 left-0 ${bearSide ? 'bg-red-500/15' : 'bg-green-500/20'}`} style={{ width: `${progress}%` }} />
-          {result.obstacles.map((obstacle) => (
-            <span key={obstacle.id} className={`absolute top-1/2 -translate-y-1/2 text-sm ${obstacle.km < frame.km ? 'opacity-20' : 'opacity-70'}`} style={{ left: `${Math.min((obstacle.km / payload.targetKm) * 100, 95)}%` }}>
-              {BEAR_UNITS[obstacle.type].emoji}
-            </span>
-          ))}
-          <span className="absolute top-1/2 -translate-y-1/2 text-2xl transition-all duration-100" style={{ left: `${Math.min(progress, 92)}%` }}>{payload.train.emoji}</span>
-          <span className="absolute right-1 top-1/2 -translate-y-1/2">🏁</span>
-        </div>
-        <div className="flex justify-between text-xs text-zinc-400 mt-2"><span>{frame.km.toFixed(1)} / {payload.targetKm} km</span><span>{frame.t.toFixed(1)}s</span></div>
-        <label htmlFor="replay-timeline" className="sr-only">Replay timeline</label>
-        <input
-          id="replay-timeline"
-          type="range"
-          min="0"
-          max={Math.max(result.frames.length - 1, 0)}
-          value={frameIndex}
-          onChange={(event) => scrubTo(Number(event.target.value))}
-          className="w-full mt-3"
-        />
-      </div>
+        {/* Track */}
+        <div className="relative">
+          <div
+            className="h-20 bg-zinc-100 dark:bg-zinc-800"
+            style={{
+              backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 10px, rgba(0,0,0,0.05) 10px, rgba(0,0,0,0.05) 12px)',
+              animation: finished && !dead ? 'none' : `rail-scroll ${Math.max(0.5, 3 - trackSpeed * 2)}s linear infinite`,
+            }}
+          >
+            {/* Zone overlays */}
+            {result.obstacles.filter((o) => o.kind === 'zone').map((obs) => {
+              const startPct = (obs.km / payload.targetKm) * 100;
+              const widthPct = (obs.lengthKm / payload.targetKm) * 100;
+              const isActive = frame.km >= obs.km && frame.km <= obs.km + obs.lengthKm;
+              return (
+                <div
+                  key={`zone-${obs.id}`}
+                  className={`absolute inset-y-0 transition-all duration-300 ${isActive ? 'opacity-40' : 'opacity-15'}`}
+                  style={{
+                    left: `${startPct}%`,
+                    width: `${widthPct}%`,
+                    background: obs.type === 'honeyZone' ? '#f59e0b' : obs.type === 'droneSwarm' ? '#6366f1' : obs.type === 'beeSwarm' ? '#eab308' : obs.type === 'bearNado' ? '#a855f7' : obs.type === 'glueRiver' ? '#06b6d4' : obs.type === 'polarMinefield' ? '#0ea5e9' : obs.type === 'mirrorMaze' ? '#ec4899' : '#8b5cf6',
+                  }}
+                />
+              );
+            })}
 
-      <div className="flex-1 min-h-64 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4 flex flex-col">
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-          <span className="text-xs text-zinc-500">Event Log · {bearSide ? 'bear command view' : 'engineer view'}</span>
-          <div className="flex gap-1">
-            <button onClick={restart} className="px-2 py-1 text-xs border rounded" aria-label="Restart replay">↺</button>
-            <button onClick={() => setPaused((value) => !value)} className="px-2 py-1 text-xs border rounded" aria-label={paused ? 'Play replay' : 'Pause replay'}>{paused ? '▶' : '⏸'}</button>
-            {PLAYBACK_SPEEDS.map((speed) => <button key={speed} onClick={() => setPlaybackSpeed(speed)} className={`px-2 py-1 text-xs border rounded ${speed === playbackSpeed ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900' : ''}`}>{speed}×</button>)}
+            {/* Obstacles */}
+            {result.obstacles.filter((o) => o.kind === 'blocker').map((obs) => {
+              const passed = obs.km < frame.km;
+              const cleared = obs.clearedT !== undefined;
+              const current = obs.contactT !== undefined && !cleared;
+              return (
+                <div
+                  key={`obs-${obs.id}`}
+                  className={`absolute top-1/2 -translate-y-1/2 text-xl transition-all duration-200 ${passed ? (cleared ? 'opacity-20 scale-75' : 'opacity-50') : 'opacity-80'} ${current ? 'animate-pulse scale-125' : ''}`}
+                  style={{ left: `${Math.min((obs.km / payload.targetKm) * 100, 94)}%` }}
+                  title={`${BEAR_UNITS[obs.type].name} ×${obs.count}`}
+                >
+                  {BEAR_UNITS[obs.type].emoji}
+                </div>
+              );
+            })}
+
+            {/* Finish line */}
+            <div className="absolute right-0 inset-y-0 flex items-center text-2xl px-2 bg-zinc-200/50 dark:bg-zinc-700/50">🏁</div>
+
+            {/* Train */}
+            <div
+              className={`absolute top-1/2 -translate-y-1/2 text-3xl transition-all duration-75 ${justHit ? 'animate-[damage-flash_0.4s_ease-out]' : ''} ${frame.grinding ? 'scale-110' : ''}`}
+              style={{ left: `${Math.min(progress, 90)}%` }}
+            >
+              {payload.train.emoji}
+              {frame.grinding && <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 text-xs animate-pulse">💥</span>}
+            </div>
           </div>
         </div>
-        <div ref={logRef} className="flex-1 overflow-y-auto space-y-1 text-sm font-mono">
-          {visibleEvents.map((event, index) => <p key={`${event.t}-${index}`} className={event.kind === 'fail' || event.kind === 'boom' ? 'text-red-500' : event.kind === 'win' || event.kind === 'clear' ? 'text-green-500' : 'text-zinc-500'}><span className="text-xs text-zinc-400">[{event.km.toFixed(1)}km]</span> {event.text}</p>)}
-          {finished && <p className={`text-center text-xl font-black py-4 ${playerWon ? 'text-green-500' : 'text-red-500'}`}>{playerWon ? (bearSide ? 'DEFENSE HOLDS!' : 'TRAIN BREAKS THROUGH!') : (bearSide ? 'TRAIN BROKE THROUGH' : 'TRAIN STOPPED')}</p>}
+
+        {/* Timeline + labels */}
+        <div className="px-4 pb-3">
+          <div className="flex justify-between text-xs text-zinc-400 mt-1.5 mb-1">
+            <span>{frame.km.toFixed(1)} / {payload.targetKm} km</span>
+            <span className="font-mono">{frame.t.toFixed(1)}s</span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max={Math.max(result.frames.length - 1, 0)}
+            value={frameIndex}
+            onChange={(event) => scrubTo(Number(event.target.value))}
+            className="w-full accent-zinc-900 dark:accent-zinc-100"
+            aria-label="Replay timeline"
+          />
         </div>
       </div>
-    </div>
-  );
-}
 
-function MetricCard({ label, value, alert, children }: { label: string; value: string; alert: boolean; children: React.ReactNode }) {
-  return (
-    <div className={`bg-white dark:bg-zinc-900 border rounded-xl p-4 ${alert ? 'border-amber-500' : 'border-zinc-200 dark:border-zinc-800'}`}>
-      <div className="text-xs text-zinc-500">{label}</div><div className="text-2xl font-bold tabular-nums">{value}</div><div className="text-xs text-zinc-400 mt-1">{children}</div>
+      {/* === STATS PANEL === */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        {/* HP */}
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs text-zinc-500">Integrity</span>
+            <span className={`text-xs font-mono font-bold ${hpPercent < 25 ? 'text-red-500 animate-pulse' : ''}`}>{Math.round(frame.hp)} / {maxHp}</span>
+          </div>
+          <div className="h-3 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
+            <div className={`h-full transition-all duration-150 ${hpColor}`} style={{ width: `${hpPercent}%` }} />
+          </div>
+          {dead && <div className="text-xs text-red-500 font-bold mt-1 animate-pulse">DESTROYED</div>}
+        </div>
+
+        {/* Speed */}
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs text-zinc-500">Speed</span>
+            <span className="text-xs font-mono font-bold">{frame.speed} km/h</span>
+          </div>
+          <div className="h-3 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
+            <div className="h-full bg-blue-500 transition-all duration-150" style={{ width: `${trackSpeed * 100}%` }} />
+          </div>
+          {frame.grinding && <div className="text-xs text-orange-500 font-bold mt-1">GRINDING</div>}
+          {frame.sticky > 0.1 && <div className="text-xs text-cyan-500 font-bold mt-1">{Math.round(frame.sticky * 100)}% SLOWED</div>}
+        </div>
+
+        {/* Distance / State */}
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4 sm:col-span-1 col-span-2">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs text-zinc-500">Status</span>
+            <span className={`text-xs font-mono font-bold ${frame.underFire ? 'text-yellow-500' : dead ? 'text-red-500' : 'text-green-500'}`}>
+              {finished ? (playerWon ? 'COMPLETE' : 'FAILED') : frame.underFire ? 'UNDER FIRE' : dead ? 'DESTROYED' : 'RUNNING'}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-zinc-400">🏁</span>
+            <div className="h-3 flex-1 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
+              <div className="h-full bg-emerald-500 transition-all duration-150" style={{ width: `${progress}%` }} />
+            </div>
+            <span className="text-zinc-400 font-mono text-xs">{frame.km.toFixed(1)}km</span>
+          </div>
+        </div>
+      </div>
+
+      {/* === EVENT LOG + CONTROLS === */}
+      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl flex flex-col min-h-0">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-zinc-100 dark:border-zinc-800">
+          <span className="text-xs text-zinc-500 font-medium">EVENT LOG · {visibleEvents.length} events</span>
+          <div className="flex items-center gap-1">
+            <button onClick={() => { setPaused(true); setFinished(false); setFrameIndex(0); }} className="px-2.5 py-1.5 text-xs border border-zinc-200 dark:border-zinc-700 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-800" title="Restart (R)">↺</button>
+            <button onClick={() => setPaused((p) => !p)} className="px-2.5 py-1.5 text-xs border border-zinc-200 dark:border-zinc-700 rounded-lg hover:bg-zinc-50 dark:hover:bg-zinc-800 min-w-[2rem]" title="Play/Pause (Space)">
+              {paused ? '▶' : '⏸'}
+            </button>
+            {PLAYBACK_SPEEDS.map((speed) => (
+              <button
+                key={speed}
+                onClick={() => setPlaybackSpeed(speed)}
+                className={`px-2 py-1.5 text-xs border rounded-lg ${speed === playbackSpeed ? 'bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 border-zinc-900 dark:border-zinc-100' : 'border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800'}`}
+              >
+                {speed}×
+              </button>
+            ))}
+            <span className="text-[10px] text-zinc-400 ml-1 hidden sm:inline">Space/R</span>
+          </div>
+        </div>
+        <div ref={logRef} className="flex-1 overflow-y-auto p-3 space-y-1 max-h-52" style={{ minHeight: '8rem' }}>
+          {visibleEvents.length === 0 && (
+            <p className="text-sm text-zinc-400 text-center py-4">The train accelerates. Bears watch from the treeline...</p>
+          )}
+          {visibleEvents.map((event, index) => (
+            <p
+              key={`${event.t}-${index}`}
+              className={`text-sm leading-relaxed animate-[slide-up_0.2s_ease-out] ${
+                event.kind === 'fail' || event.kind === 'boom' ? 'text-red-500 font-medium' :
+                event.kind === 'win' ? 'text-emerald-600 font-bold' :
+                event.kind === 'clear' ? 'text-green-600' :
+                event.kind === 'mine' ? 'text-orange-500' :
+                event.kind === 'info' ? 'text-blue-500' :
+                event.kind === 'hit' ? 'text-red-400' :
+                'text-zinc-500'
+              }`}
+            >
+              <span className="text-[10px] text-zinc-400 font-mono mr-1.5">[{event.t.toFixed(1)}s]</span>
+              {event.text}
+            </p>
+          ))}
+          {finished && (
+            <div className={`text-center py-4 animate-[fade-in_1s_ease-out] ${playerWon ? '' : ''}`}>
+              <p className={`text-2xl font-black ${playerWon ? 'text-emerald-500' : 'text-red-500'}`}>
+                {playerWon ? (bearSide ? '🐻 DEFENSE HOLDS!' : '🚂 TRAIN BREAKS THROUGH!') : (bearSide ? '🚂 TRAIN BROKE THROUGH' : '🐻 TRAIN STOPPED')}
+              </p>
+              <p className="text-sm text-zinc-400 mt-1">
+                {result.reachedKm.toFixed(1)} / {result.targetKm} km · {result.timeSec}s · {result.bearsSmashed} bears cleared
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

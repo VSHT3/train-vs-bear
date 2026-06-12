@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { SoundProvider } from "@/lib/sound";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -36,7 +37,7 @@ export default function RootLayout({
         <a href="#main-content" className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-2 focus:bg-white focus:text-zinc-900 focus:rounded-xl focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-zinc-400">
           Skip to content
         </a>
-        {children}
+        <SoundProvider>{children}</SoundProvider>
       </body>
     </html>
   );

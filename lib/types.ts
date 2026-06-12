@@ -213,4 +213,5 @@ export interface GameState {
   lastSummary: RoundOutcomeSummary | null;
   totalBearsSmashed: number;
   totalKm: number;
+  freeplay: boolean;
 }

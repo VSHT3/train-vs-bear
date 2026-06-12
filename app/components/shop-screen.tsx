@@ -355,6 +355,33 @@ function StatLegend() {
   );
 }
 
+const TRAIN_MAX_STATS: Record<keyof TrainStats, number> = {
+  topSpeed: Math.max(...TRAINS.map((t) => t.base.topSpeed)),
+  accel: Math.max(...TRAINS.map((t) => t.base.accel)),
+  maxHp: Math.max(...TRAINS.map((t) => t.base.maxHp)),
+  armor: Math.max(...TRAINS.map((t) => t.base.armor)),
+  plow: Math.max(...TRAINS.map((t) => t.base.plow)),
+  grip: Math.max(...TRAINS.map((t) => t.base.grip)),
+  heatShield: Math.max(...TRAINS.map((t) => t.base.heatShield)),
+  energyWeapon: Math.max(...TRAINS.map((t) => t.base.energyWeapon)),
+  regen: Math.max(...TRAINS.map((t) => t.base.regen)),
+};
+
+function StatBar({ label, value, max, format, color }: { label: string; value: number; max: number; format: (v: number) => string; color: string }) {
+  const pct = Math.min((value / max) * 100, 100);
+  return (
+    <div className="group relative cursor-help" title={`${label}: ${format(value)}`}>
+      <div className="flex items-center justify-between mb-0.5">
+        <span className="text-xs text-zinc-400">{label}</span>
+        <span className="text-xs font-mono text-zinc-500">{format(value)}</span>
+      </div>
+      <div className="h-1.5 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full transition-all duration-300 ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
 function TrainCard({
   state,
   stats,
@@ -369,60 +396,98 @@ function TrainCard({
   const train = getTrain(state.trainId);
   return (
     <div className="bg-white dark:bg-zinc-900 border-2 border-zinc-200 dark:border-zinc-800 rounded-2xl p-6">
-      <div className="flex items-center gap-4 mb-4">
-        <Sprite src={trainSpriteSrc(train.id)} emoji={train.emoji} alt={train.name} size={112} />
-        <div><h3 className="text-2xl font-bold">{train.name}</h3><p className="text-sm text-zinc-500 mt-1">{train.desc}</p></div>
+      <div className="flex items-center gap-4 mb-5">
+        <Sprite src={trainSpriteSrc(train.id)} emoji={train.emoji} alt={train.name} size={96} />
+        <div className="min-w-0">
+          <h3 className="text-2xl font-bold">{train.name}</h3>
+          <p className="text-sm text-zinc-400 mt-0.5">{train.desc}</p>
+          <p className="text-xs text-zinc-500 mt-1">{train.modSlots} slots · {train.cars} cars</p>
+        </div>
       </div>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-base">
+      <div className="space-y-1.5">
         {STAT_KEYS.map((key) => (
-          <div key={key} title={STAT_INFO[key].desc} className="cursor-help">
-            <strong>{STAT_INFO[key].format(stats[key])}</strong>{' '}
-            <span className="text-zinc-400 text-sm">{STAT_INFO[key].label}</span>
-          </div>
+          <StatBar key={key} label={STAT_INFO[key].label} value={stats[key]} max={TRAIN_MAX_STATS[key]} format={STAT_INFO[key].format} color={
+            key === 'topSpeed' || key === 'accel' ? 'bg-blue-500' :
+            key === 'maxHp' || key === 'armor' ? 'bg-green-500' :
+            key === 'plow' || key === 'grip' ? 'bg-amber-500' :
+            key === 'heatShield' ? 'bg-orange-500' :
+            key === 'energyWeapon' ? 'bg-purple-500' :
+            key === 'regen' ? 'bg-cyan-500' : 'bg-zinc-500'
+          } />
         ))}
       </div>
       {(installedMods.length > 0 || state.customMods.length > 0) && (
-        <div className="mt-4 flex flex-wrap gap-1.5">
+        <div className="mt-4 flex flex-wrap gap-1.5 border-t border-zinc-100 dark:border-zinc-800 pt-4">
           {installedMods.map((mod) => (
-            <button key={mod.id} onClick={() => onRemoveMod(mod.id)} title={`Remove ${mod.name} (refunds nothing)`} className="text-sm px-2.5 py-1 rounded-full bg-zinc-100 dark:bg-zinc-800 hover:bg-red-100 dark:hover:bg-red-950">
+            <button key={mod.id} onClick={() => onRemoveMod(mod.id)} title={`Remove ${mod.name} (refunds nothing)`} className="text-sm px-2.5 py-1 rounded-full bg-zinc-100 dark:bg-zinc-800 hover:bg-red-100 dark:hover:bg-red-950 transition-colors">
               {mod.emoji} {mod.name} ✕
             </button>
           ))}
-          {state.customMods.map((mod) => <span key={mod.id} className="text-sm px-2.5 py-1 rounded-full bg-purple-100 dark:bg-purple-950">{mod.emoji} {mod.name}</span>)}
+          {state.customMods.map((mod) => <span key={mod.id} className="text-sm px-2.5 py-1 rounded-full bg-purple-100 dark:bg-purple-950 border border-purple-200 dark:border-purple-800">{mod.emoji} {mod.name}</span>)}
         </div>
       )}
     </div>
   );
 }
 
+const ZONE_STYLES: Record<string, string> = {
+  honeyZone: 'bg-amber-400/30',
+  polarMinefield: 'bg-cyan-400/20',
+  droneSwarm: 'bg-indigo-400/20',
+  beeSwarm: 'bg-yellow-400/20',
+  glueRiver: 'bg-cyan-300/25',
+  mirrorMaze: 'bg-pink-300/20',
+  bearNado: 'bg-purple-400/25',
+};
+
 function BearShop({ state, onPlaceBear, onRemoveBear, onReady }: ShopScreenProps) {
   const [selectedType, setSelectedType] = useState<BearUnitType>('bear');
   const [atKm, setAtKm] = useState(1.5);
+  const [unitFilter, setUnitFilter] = useState<'all' | 'blocker' | 'zone'>('all');
   const targetKm = targetKmForRound(state.round);
   const remaining = bearBudgetRemaining(state);
   const selected = BEAR_UNITS[selectedType];
 
+  const filteredTypes = (Object.keys(BEAR_UNITS) as BearUnitType[]).filter((t) => unitFilter === 'all' || BEAR_UNITS[t].kind === unitFilter);
+
   return (
     <div className="flex-1 flex flex-col p-4 sm:p-8 gap-6 max-w-screen-2xl mx-auto w-full">
-      <div className="flex items-center justify-between">
-        <div><h2 className="text-3xl font-black">🐻 Bear Defense Shop</h2><p className="text-base text-zinc-500 mt-1">Place blockers and zones before inspecting the incoming train.</p></div>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div><h2 className="text-3xl font-black">🐻 Bear Defense Shop</h2><p className="text-base text-zinc-500 mt-1">Place blockers and zones to stop the incoming train.</p></div>
         <div className="text-right"><div className="text-3xl font-black text-amber-600">{remaining}</div><div className="text-sm text-zinc-400">credits remaining</div></div>
       </div>
 
       <div className="bg-white dark:bg-zinc-900 border-2 border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 space-y-4">
         <div className="relative h-16 bg-zinc-100 dark:bg-zinc-800 rounded-xl overflow-hidden">
+          {/* Zone overlays */}
+          {state.bearPlacements.filter((p) => BEAR_UNITS[p.type].kind === 'zone').map((placement, i) => {
+            const startPct = (placement.atKm / targetKm) * 100;
+            const lengthPct = ((BEAR_UNITS[placement.type].zoneLengthKm ?? 1) / targetKm) * 100;
+            return (
+              <div
+                key={`zone-bg-${i}`}
+                className={`absolute inset-y-0 ${ZONE_STYLES[placement.type] ?? 'bg-zinc-300/30'}`}
+                style={{ left: `${startPct}%`, width: `${lengthPct}%` }}
+              />
+            );
+          })}
+          {/* Blockers */}
           {state.bearPlacements.map((placement, index) => (
             <button
               key={`${placement.type}-${placement.atKm}-${index}`}
               onClick={() => onRemoveBear(index)}
               title={`Remove ${BEAR_UNITS[placement.type].name} ×${placement.count}`}
-              className="absolute top-1/2 -translate-y-1/2 text-xl hover:scale-125"
+              className="absolute top-1/2 -translate-y-1/2 text-xl hover:scale-125 transition-transform z-10"
               style={{ left: `${Math.min((placement.atKm / targetKm) * 100, 94)}%` }}
             >
               {BEAR_UNITS[placement.type].emoji}<span className="text-xs">{placement.count > 1 ? placement.count : ''}</span>
             </button>
           ))}
-          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xl">🏁</span>
+          <span className="absolute right-2 top-1/2 -translate-y-1/2 text-xl z-10">🏁</span>
+          {/* Tick marks at 5km intervals */}
+          {Array.from({ length: Math.floor(targetKm / 5) + 1 }, (_, i) => (
+            <span key={`tick-${i}`} className="absolute bottom-0.5 text-[8px] text-zinc-400" style={{ left: `${(i * 5 / targetKm) * 100}%` }}>{i * 5}</span>
+          ))}
         </div>
         <div>
           <label htmlFor="bear-position" className="flex justify-between text-sm text-zinc-500 mb-1"><span>Placement position</span><strong className="text-base">{atKm.toFixed(1)} km</strong></label>
@@ -437,20 +502,42 @@ function BearShop({ state, onPlaceBear, onRemoveBear, onReady }: ShopScreenProps
         </button>
       </div>
 
+      <div className="flex gap-2">
+        {(['all', 'blocker', 'zone'] as const).map((f) => (
+          <button key={f} onClick={() => setUnitFilter(f)}
+            className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${unitFilter === f ? 'bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700'}`}>
+            {f === 'all' ? 'All units' : f === 'blocker' ? '🚧 Blockers' : '🌊 Zones'}
+          </button>
+        ))}
+        <span className="text-xs text-zinc-400 self-center ml-auto">{filteredTypes.length} units</span>
+      </div>
+
       <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
-        {(Object.keys(BEAR_UNITS) as BearUnitType[]).map((type) => {
+        {filteredTypes.map((type) => {
           const unit = BEAR_UNITS[type];
+          const count = state.bearPlacements.filter((p) => p.type === type).reduce((s, p) => s + p.count, 0);
           return (
             <button
               key={type}
               onClick={() => setSelectedType(type)}
-              className={`text-left p-4 rounded-2xl border-2 ${selectedType === type ? 'border-amber-600 bg-amber-50 dark:bg-amber-950/20' : 'border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-zinc-400'}`}
+              className={`text-left p-4 rounded-2xl border-2 transition-colors ${selectedType === type ? 'border-amber-600 bg-amber-50 dark:bg-amber-950/20' : 'border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-zinc-400'}`}
             >
               <div className="flex gap-4">
                 <Sprite src={unitSpriteSrc(type)} emoji={unit.emoji} alt={unit.name} size={72} />
                 <div className="min-w-0 flex-1">
-                  <div className="flex justify-between gap-2"><strong className="text-base">{unit.name}</strong><span className="text-base font-semibold text-amber-600">{unit.cost}</span></div>
-                  <p className="text-sm text-zinc-500 mt-1">{unit.kind} · {unit.desc}</p>
+                  <div className="flex justify-between gap-2 items-start">
+                    <strong className="text-base">{unit.name}</strong>
+                    <div className="text-right shrink-0">
+                      <span className="text-base font-semibold text-amber-600">{unit.cost}</span>
+                      {count > 0 && <span className="block text-xs text-zinc-400">×{count}</span>}
+                    </div>
+                  </div>
+                  <p className="text-sm text-zinc-500 mt-1">
+                    <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${unit.kind === 'blocker' ? 'bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400' : 'bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400'} mr-1.5`}>
+                      {unit.kind}
+                    </span>
+                    {unit.desc}
+                  </p>
                 </div>
               </div>
             </button>
