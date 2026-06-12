@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import type { BearPlan, GameState, Mod, Odds, SimResult } from '@/lib/types';
+import type { BearPlan, GameState, Mod, Odds, SimResult, TrainStats } from '@/lib/types';
 import {
   createGame,
   buyTrain,
@@ -11,6 +11,7 @@ import {
   startRun as startRunPhase,
   finishRun as finishRunPhase,
   nextRound,
+  dismissRoundIntro,
   activeModFlags,
   activeModEffects,
   canAffordTrain,
@@ -80,7 +81,7 @@ export default function Game() {
     const modNames = allMods.map((m) => m.name);
 
     const plan = useAI
-      ? await getBearPlan(state.round, stats, modNames, 0, targetKm, state.lastSummary?.outcome !== 'win' && state.round > 1)
+      ? await getBearPlan(state.round, stats, modNames, targetKm, state.lastSummary?.outcome !== 'win' && state.round > 1)
       : await getPresetPlan(state.round, targetKm, state.lastSummary?.outcome !== 'win' && state.round > 1);
 
     const odds = await computeOdds(state, plan);
@@ -117,6 +118,10 @@ export default function Game() {
     setCustomPrompt('');
   }, []);
 
+  const handleDismissIntro = useCallback(() => {
+    setState((prev) => dismissRoundIntro(prev));
+  }, []);
+
   // ---- Render ----
 
   return (
@@ -142,6 +147,12 @@ export default function Game() {
       <main className="flex-1 flex flex-col">
         {state.phase === 'title' && (
           <TitleScreen onStart={handleNewGame} />
+        )}
+        {state.phase === 'roundIntro' && (
+          <RoundIntroScreen
+            round={state.round}
+            onDismiss={handleDismissIntro}
+          />
         )}
         {state.phase === 'shop' && (
           <ShopScreen
@@ -197,6 +208,49 @@ export default function Game() {
           <GameOverScreen state={state} onNewGame={handleNewGame} />
         )}
       </main>
+    </div>
+  );
+}
+
+// ============================================================
+// ROUND INTRO SCREEN
+// ============================================================
+
+const ROUND_INTROS = [
+  null,
+  { subtitle: "The bears have heard you're coming. They're not impressed.", emoji: "🐻", line: "They've budgeted for basic bear deployment." },
+  { subtitle: "The bear commander is warming up. Budget increasing.", emoji: "🐻‍❄️", line: "Standard obstacles won't cut it anymore." },
+  { subtitle: "Half a dozen obstacles ahead. The bears are coordinating.", emoji: "🧨", line: "The honey zones are getting stickier." },
+  { subtitle: "The bears have studied your moves. They're adapting.", emoji: "🕵️", line: "Expect experimental units on the track." },
+  { subtitle: "Bear command has authorized experimental units.", emoji: "🐋", line: "Some of these are not even bears anymore." },
+  { subtitle: "The bears are getting desperate. And creative. And expensive.", emoji: "🌪️", line: "They're pulling out all the stops." },
+  { subtitle: "Final round. The bear council has authorized EVERYTHING.", emoji: "👹", line: "This is it. Go big or go extinct." },
+];
+
+function RoundIntroScreen({ round, onDismiss }: { round: number; onDismiss: () => void }) {
+  const intro = ROUND_INTROS[Math.min(round, ROUND_INTROS.length - 1)];
+  if (!intro) return null;
+
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center p-8 gap-8 text-center">
+      <div className="space-y-6">
+        <div className="text-7xl animate-bounce">{intro.emoji}</div>
+        <h2 className="text-5xl font-black tracking-tighter">
+          Round {round}
+        </h2>
+        <p className="text-xl text-zinc-500 dark:text-zinc-400 max-w-md italic">
+          &ldquo;{intro.subtitle}&rdquo;
+        </p>
+        <p className="text-sm text-zinc-400 max-w-sm">
+          {intro.line}
+        </p>
+      </div>
+      <button
+        onClick={onDismiss}
+        className="px-10 py-4 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-2xl text-xl font-bold hover:scale-105 transition-transform"
+      >
+        LET&apos;S GO →
+      </button>
     </div>
   );
 }
@@ -568,45 +622,50 @@ function RunScreen({
   targetKm: number;
   onDone: (sim: SimResult) => void;
 }) {
-  const [simResult] = useState(() => {
-    const train = getTrain(state.trainId);
-    const effects = activeModEffects(state);
-    const stats = composeStats(train.base, effects);
-    const flags = activeModFlags(state);
-    return runSimulation(stats, flags, state.plan!.placements, targetKm);
-  });
+  const train = getTrain(state.trainId);
+  const effects = activeModEffects(state);
+  const stats = composeStats(train.base, effects);
+  const flags = activeModFlags(state);
+
+  const [simResult] = useState(() => runSimulation(stats, flags, state.plan!.placements, targetKm));
 
   const [frameIdx, setFrameIdx] = useState(0);
   const [finished, setFinished] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const [paused, setPaused] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
+  const pendingRef = useRef(false);
 
   const frames = simResult.frames;
   const events = simResult.events;
   const currentFrame = frames[Math.min(frameIdx, frames.length - 1)];
 
   useEffect(() => {
-    if (finished) return;
-    const interval = setInterval(() => {
+    if (finished || paused) return;
+    const ms = Math.max(16, 80 / playbackSpeed);
+    const id = setInterval(() => {
+      if (pendingRef.current) return;
+      pendingRef.current = true;
       setFrameIdx((prev) => {
+        pendingRef.current = false;
         if (prev >= frames.length - 1) {
           setFinished(true);
-          clearInterval(interval);
+          clearInterval(id);
           return prev;
         }
         return prev + 1;
       });
-    }, 80);
-    return () => clearInterval(interval);
-  }, [frames.length, finished]);
+    }, ms);
+    return () => clearInterval(id);
+  }, [frames.length, finished, playbackSpeed, paused]);
 
   useEffect(() => {
     if (finished) {
-      const timer = setTimeout(() => onDone(simResult), 1500);
+      const timer = setTimeout(() => onDone(simResult), 2000);
       return () => clearTimeout(timer);
     }
   }, [finished, simResult, onDone]);
 
-  // Scroll log
   useEffect(() => {
     if (logRef.current) {
       logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -614,42 +673,81 @@ function RunScreen({
   }, [frameIdx]);
 
   const progressPct = Math.min((currentFrame.km / targetKm) * 100, 100);
-  const hpPct = Math.max((currentFrame.hp / (getTrain(state.trainId).base.maxHp + 500)) * 100, 0);
+  const topSpeed = train.base.topSpeed;
+  const hpPct = Math.max((currentFrame.hp / stats.maxHp) * 100, 0);
 
-  // Show events up to current frame time
   const visibleEvents = events.filter((e) => e.t <= currentFrame.t + 0.01);
+
+  const speedPct = Math.min((currentFrame.speed / (topSpeed + 100)) * 100, 100);
+
+  const eventStyle = (kind: string) => {
+    switch (kind) {
+      case 'boom': return 'text-red-600 dark:text-red-400 font-bold';
+      case 'hit': return 'text-orange-600 dark:text-orange-400';
+      case 'zone': return 'text-blue-600 dark:text-blue-400';
+      case 'mine': return 'text-amber-600 dark:text-amber-400 font-bold';
+      case 'clear': return 'text-green-600 dark:text-green-400';
+      case 'win': return 'text-green-600 dark:text-green-400 font-bold text-lg';
+      case 'fail': return 'text-red-600 dark:text-red-400 font-bold text-lg';
+      default: return 'text-zinc-600 dark:text-zinc-400';
+    }
+  };
+
+  const SPEEDS = [1, 2, 3, 4, 5] as const;
 
   return (
     <div className="flex-1 flex flex-col p-6 gap-4 max-w-3xl mx-auto w-full">
       {/* Speed + HP bars */}
       <div className="grid grid-cols-2 gap-4">
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4">
+        <div className={`bg-white dark:bg-zinc-900 border rounded-xl p-4 transition-colors duration-200 ${
+          currentFrame.underFire ? 'border-red-400 dark:border-red-600' :
+          currentFrame.grinding ? 'border-orange-400 dark:border-orange-600' :
+          'border-zinc-200 dark:border-zinc-800'
+        }`}>
           <div className="text-xs text-zinc-500 mb-1">Speed</div>
           <div className="text-3xl font-bold tabular-nums">{currentFrame.speed}</div>
           <div className="text-xs text-zinc-400">km/h</div>
-          <div className="mt-2 h-1.5 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
-            <div className="h-full bg-blue-500 rounded-full transition-all duration-100" style={{ width: `${Math.min((currentFrame.speed / (getTrain(state.trainId).base.topSpeed + 100)) * 100, 100)}%` }} />
+          <div className="mt-2 h-2 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-150 ${
+                currentFrame.speed > topSpeed * 0.7 ? 'bg-green-500' :
+                currentFrame.speed > topSpeed * 0.3 ? 'bg-blue-500' :
+                'bg-red-500'
+              }`}
+              style={{ width: `${speedPct}%` }}
+            />
           </div>
           {currentFrame.sticky > 0 && (
-            <div className="text-xs text-amber-500 mt-1">Sticky: {Math.round(currentFrame.sticky * 100)}%</div>
+            <div className="text-xs text-amber-500 mt-1 animate-pulse">🧲 Sticky: {Math.round(currentFrame.sticky * 100)}%</div>
           )}
           {currentFrame.grinding && (
-            <div className="text-xs text-red-500 mt-1">GRINDING!</div>
+            <div className="text-xs text-red-500 mt-1 font-bold animate-pulse">⚙️ GRINDING!</div>
           )}
           {currentFrame.underFire && (
-            <div className="text-xs text-orange-500 mt-1">UNDER FIRE</div>
+            <div className="text-xs text-orange-500 mt-1 animate-pulse">🔥 UNDER FIRE</div>
           )}
         </div>
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4">
+        <div className={`bg-white dark:bg-zinc-900 border rounded-xl p-4 transition-colors duration-200 ${
+          hpPct < 25 ? 'border-red-400 dark:border-red-600' :
+          hpPct < 50 ? 'border-yellow-400 dark:border-yellow-600' :
+          'border-zinc-200 dark:border-zinc-800'
+        }`}>
           <div className="text-xs text-zinc-500 mb-1">HP</div>
-          <div className="text-3xl font-bold tabular-nums">{currentFrame.hp}</div>
-          <div className="text-xs text-zinc-400">/{getTrain(state.trainId).base.maxHp + 500}</div>
-          <div className="mt-2 h-1.5 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
+          <div className={`text-3xl font-bold tabular-nums ${
+            hpPct < 25 ? 'text-red-600 dark:text-red-400' : ''
+          }`}>{currentFrame.hp}</div>
+          <div className="text-xs text-zinc-400">/{stats.maxHp}</div>
+          <div className="mt-2 h-2 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all duration-100 ${hpPct > 50 ? 'bg-green-500' : hpPct > 25 ? 'bg-yellow-500' : 'bg-red-500'}`}
+              className={`h-full rounded-full transition-all duration-150 ${
+                hpPct > 50 ? 'bg-green-500' : hpPct > 25 ? 'bg-yellow-500' : 'bg-red-500'
+              }`}
               style={{ width: `${hpPct}%` }}
             />
           </div>
+          {hpPct < 25 && (
+            <div className="text-xs text-red-500 mt-1 font-bold animate-pulse">⚠️ CRITICAL!</div>
+          )}
         </div>
       </div>
 
@@ -657,65 +755,130 @@ function RunScreen({
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4">
         <div className="flex justify-between text-xs text-zinc-500 mb-2">
           <span>0 km</span>
-          <span>{targetKm} km</span>
+          <span className="font-medium">{targetKm} km</span>
         </div>
-        <div className="relative h-10 bg-zinc-100 dark:bg-zinc-800 rounded-lg overflow-hidden">
+        <div className="relative h-12 bg-zinc-100 dark:bg-zinc-800 rounded-lg overflow-hidden">
+          {/* Progress fill */}
           <div
-            className="absolute inset-y-0 left-0 bg-gradient-to-r from-green-500/30 to-green-500/10 transition-all duration-100"
+            className="absolute inset-y-0 left-0 bg-gradient-to-r from-green-500/40 to-green-500/10 transition-all duration-150"
             style={{ width: `${progressPct}%` }}
           />
+          {/* Goal flag */}
+          <div className="absolute right-1 top-1/2 -translate-y-1/2 text-lg opacity-60">🏁</div>
+          {/* Train with motion trail */}
           <div
-            className="absolute top-0.5 text-2xl transition-all duration-100"
-            style={{ left: `${Math.min(progressPct, 92)}%` }}
+            className="absolute top-1 text-2xl transition-all duration-150 drop-shadow-lg"
+            style={{ left: `${Math.min(progressPct, 90)}%` }}
           >
-            {getTrain(state.trainId).emoji}
+            {train.emoji}
           </div>
-          {/* Obstacle markers */}
-          {simResult.obstacles.filter(o => o.km > currentFrame.km).slice(0, 8).map((obs) => {
+          {/* Obstacles behind (ghosted) */}
+          {simResult.obstacles.filter(o => o.km <= currentFrame.km).slice(-5).map((obs) => {
             const spec = BEAR_UNITS[obs.type];
             const leftPct = (obs.km / targetKm) * 100;
+            const isCleared = obs.clearedT !== undefined;
             return (
               <div
-                key={obs.id}
-                className="absolute text-xs opacity-40"
+                key={`behind-${obs.id}`}
+                className="absolute text-xs opacity-20"
                 style={{ left: `${Math.min(leftPct, 95)}%`, top: '50%', transform: 'translateY(-50%)' }}
+                title={isCleared ? 'Cleared' : 'Survived'}
               >
                 {spec?.emoji ?? '🐻'}
               </div>
             );
           })}
+          {/* Obstacles ahead */}
+          {simResult.obstacles.filter(o => o.km > currentFrame.km).slice(0, 8).map((obs) => {
+            const spec = BEAR_UNITS[obs.type];
+            const leftPct = (obs.km / targetKm) * 100;
+            const isZone = spec?.kind === 'zone';
+            return (
+              <div key={obs.id}>
+                {isZone && (
+                  <div
+                    className="absolute inset-y-0 bg-red-500/10 border-x border-red-500/20"
+                    style={{ left: `${(obs.km / targetKm) * 100}%`, width: `${((obs.lengthKm ?? 0) / targetKm) * 100}%` }}
+                  />
+                )}
+                <div
+                  className="absolute text-xs opacity-60"
+                  style={{ left: `${Math.min(leftPct, 95)}%`, top: '50%', transform: 'translateY(-50%)' }}
+                  title={`${spec?.name ?? obs.type} ×${obs.count} at ${obs.km}km`}
+                >
+                  {spec?.emoji ?? '🐻'}
+                </div>
+              </div>
+            );
+          })}
         </div>
         <div className="flex justify-between text-xs text-zinc-400 mt-1">
-          <span>Traveled: {currentFrame.km.toFixed(1)} km</span>
-          <span>Time: {currentFrame.t.toFixed(1)}s</span>
+          <span>Traveled: <strong>{currentFrame.km.toFixed(1)}</strong> km</span>
+          <span>Time: <strong>{currentFrame.t.toFixed(1)}</strong>s</span>
+          {simResult.outcome !== 'win' && !finished && (
+            <span className="text-amber-500">
+              {((targetKm - currentFrame.km) / Math.max(currentFrame.speed, 1) * 3600).toFixed(0)}s ETA
+            </span>
+          )}
         </div>
       </div>
 
       {/* Event log */}
       <div className="flex-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl p-4 overflow-hidden flex flex-col min-h-0">
-        <div className="text-xs text-zinc-500 mb-2">Event Log</div>
-        <div ref={logRef} className="flex-1 overflow-y-auto space-y-1 text-sm">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs text-zinc-500 font-medium">Event Log</div>
+          <div className="flex items-center gap-1">
+            {!finished && (
+              <button
+                onClick={() => setPaused((p) => !p)}
+                className="px-2 py-0.5 text-xs rounded border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+                title={paused ? 'Resume' : 'Pause'}
+              >
+                {paused ? '▶' : '⏸'}
+              </button>
+            )}
+            {SPEEDS.map((s) => (
+              <button
+                key={s}
+                onClick={() => setPlaybackSpeed(s)}
+                disabled={finished}
+                className={`px-2 py-0.5 text-xs rounded border transition-colors ${
+                  playbackSpeed === s
+                    ? 'bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 border-zinc-900 dark:border-zinc-100'
+                    : 'border-zinc-200 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30'
+                }`}
+              >
+                {s}×
+              </button>
+            ))}
+          </div>
+        </div>
+        <div ref={logRef} className="flex-1 overflow-y-auto space-y-0.5 text-sm font-mono">
+          {visibleEvents.length === 0 && (
+            <div className="text-zinc-400 italic text-xs py-4 text-center">Waiting for action...</div>
+          )}
           {visibleEvents.map((e, i) => (
-            <div key={i} className="text-zinc-600 dark:text-zinc-400">
+            <div key={i} className={`${eventStyle(e.kind)} leading-relaxed`}>
               <span className="text-xs text-zinc-400 tabular-nums">[{e.km.toFixed(1)}km]</span>{' '}
               {e.text}
             </div>
           ))}
           {finished && (
-            <div className="text-lg font-bold text-center py-4">
-              {simResult.outcome === 'win'
-                ? '🏁 VICTORY!'
-                : `💀 ${simResult.outcome.toUpperCase()}`}
+            <div className="text-center py-6 space-y-2">
+              <div className={`text-2xl font-black ${
+                simResult.outcome === 'win' ? 'text-green-600' : 'text-red-600'
+              }`}>
+                {simResult.outcome === 'win'
+                  ? '🏁 VICTORY!'
+                  : `💀 ${simResult.outcome.toUpperCase()}`}
+              </div>
+              <div className="text-xs text-zinc-400 animate-pulse">
+                Loading results...
+              </div>
             </div>
           )}
         </div>
       </div>
-
-      {finished && (
-        <div className="text-center text-zinc-400 text-sm animate-pulse">
-          Loading results...
-        </div>
-      )}
     </div>
   );
 }
@@ -724,45 +887,185 @@ function RunScreen({
 // RESULT SCREEN
 // ============================================================
 
+function strongStat(stats: TrainStats): string {
+  const entries: [string, number][] = [
+    ['blazing speed', stats.topSpeed / 520],
+    ['thick armor', stats.armor / 0.8],
+    ['industrial plow', stats.plow / 120],
+    ['energy weapon', stats.energyWeapon / 50],
+    ['self-repair systems', stats.regen / 6],
+    ['traction grip', stats.grip / 1],
+  ];
+  return entries.reduce((a, b) => a[1] >= b[1] ? a : b)[0];
+}
+
+function weakStat(stats: TrainStats): string {
+  const entries: [string, number][] = [
+    ['modest top speed', stats.topSpeed / 520],
+    ['lack of armor', stats.armor / 0.8],
+    ['weak plow', stats.plow / 120],
+    ['no energy weapon', stats.energyWeapon / 50],
+    ['no regeneration', stats.regen / 6],
+    ['poor grip', stats.grip / 1],
+  ];
+  return entries.reduce((a, b) => a[1] <= b[1] ? a : b)[0];
+}
+
+function suggestionMod(stats: TrainStats): string {
+  if (stats.armor < 0.15) return 'Reactive Armor 🛡️';
+  if (stats.topSpeed < 200) return 'Nitro Boosters 🔥';
+  if (stats.plow < 30) return 'Cowcatcher 9000 🔱';
+  if (stats.regen < 2) return 'Emotional Support Caboose 🧸';
+  if (stats.energyWeapon < 10) return 'Roof Laser Turret 🔫';
+  if (stats.grip < 0.3) return "Honey-B-Gone™ Coating 🧈";
+  return 'Extra Hull Plating 🧱';
+}
+
 function ResultScreen({ state, onNext }: { state: GameState; onNext: () => void }) {
   const summary = state.lastSummary;
+  const sim = state.sim;
   const won = summary?.outcome === 'win';
+  const train = getTrain(state.trainId);
+  const breakdown = sim?.damageBreakdown;
+  const totalDmg = breakdown ? breakdown.impact + breakdown.zone + breakdown.grind + breakdown.mines : 0;
+
+  const killerEncounter = sim?.obstacleEncounters.find((e) => e.outcome === 'killer') ??
+    (sim?.obstacleEncounters.length ? sim.obstacleEncounters[sim.obstacleEncounters.length - 1] : null);
+
+  const dmgBar = (label: string, val: number, color: string) => {
+    if (totalDmg === 0) return null;
+    const pct = (val / totalDmg) * 100;
+    if (pct < 1) return null;
+    return (
+      <div className="flex items-center gap-2 text-xs">
+        <span className="w-16 text-zinc-500 text-right">{label}</span>
+        <div className="flex-1 h-2 bg-zinc-100 dark:bg-zinc-800 rounded-full overflow-hidden">
+          <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
+        </div>
+        <span className="w-12 text-zinc-400 tabular-nums">{Math.round(val)}</span>
+      </div>
+    );
+  };
 
   return (
-    <div className="flex-1 flex flex-col items-center justify-center p-6 gap-6 max-w-md mx-auto text-center">
-      <div className="text-7xl">{won ? '🏆' : '💀'}</div>
-      <h2 className="text-3xl font-black">{won ? 'ROUND WON!' : 'ROUND LOST'}</h2>
+    <div className="flex-1 flex flex-col items-center p-6 gap-5 max-w-lg mx-auto w-full">
+      {/* Header */}
+      <div className="text-center">
+        <div className="text-6xl mb-2">{won ? '🏆' : '💀'}</div>
+        <h2 className="text-3xl font-black">{won ? 'ROUND WON!' : 'ROUND LOST'}</h2>
+      </div>
 
-      {summary && (
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 w-full space-y-3">
-          <div className="grid grid-cols-2 gap-2 text-sm">
-            <div className="text-zinc-500">Distance</div>
-            <div className="font-medium">{summary.reachedKm.toFixed(1)} / {summary.targetKm} km</div>
-            <div className="text-zinc-500">Bears Smashed</div>
-            <div className="font-medium">{summary.bearsSmashed}</div>
-            <div className="text-zinc-500">Outcome</div>
-            <div className="font-medium">{summary.outcome}</div>
+      {/* Narrative card */}
+      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 w-full space-y-4">
+        {won && summary && sim ? (
+          <>
+            <p className="text-sm text-zinc-700 dark:text-zinc-300 leading-relaxed">
+              Your <strong>{train.name}</strong> {train.emoji} thundered{' '}
+              <strong>{summary.reachedKm.toFixed(1)} km</strong> through{' '}
+              <strong>{summary.bearsSmashed}</strong> bears in{' '}
+              <strong>{sim.timeSec}s</strong> with{' '}
+              <strong>{sim.finalHp} HP</strong> remaining!
+            </p>
+            <p className="text-sm text-zinc-500 italic">
+              The bears&rsquo; plan was no match for your {strongStat(composeStats(train.base, []))}.
+              {summary.bearsSmashed > 20 && ' They didn\'t stand a chance.'}
+            </p>
+          </>
+        ) : summary && sim ? (
+          <>
+            <p className="text-sm text-zinc-700 dark:text-zinc-300 leading-relaxed">
+              You almost made it — just{' '}
+              <strong className="text-red-500">{(summary.targetKm - summary.reachedKm).toFixed(1)} km</strong>{' '}
+              from the finish line.
+            </p>
+            {killerEncounter && (
+              <p className="text-sm text-zinc-500">
+                The {killerEncounter.emoji} <strong>{killerEncounter.name}</strong> at {killerEncounter.atKm}km was too much for your{' '}
+                <strong>{weakStat(composeStats(train.base, []))}</strong>.
+              </p>
+            )}
+            <p className="text-sm text-zinc-500 italic">
+              Next time, try installing <strong>{suggestionMod(composeStats(train.base, []))}</strong>.
+            </p>
+          </>
+        ) : null}
+
+        {/* Encounter summary */}
+        {sim && sim.obstacleEncounters.length > 0 && (
+          <div>
+            <div className="text-xs font-medium text-zinc-500 mb-2">Obstacles Encountered</div>
+            <div className="flex flex-wrap gap-1.5">
+              {sim.obstacleEncounters.map((enc, i) => {
+                const colorMap: Record<string, string> = {
+                  vaporized: 'text-blue-500',
+                  smashed: 'text-green-500',
+                  grinded: 'text-orange-500',
+                  endured: 'text-purple-500',
+                  bypassed: 'text-zinc-400',
+                  killer: 'text-red-500',
+                };
+                const labelMap: Record<string, string> = {
+                  vaporized: 'vaporized',
+                  smashed: 'smashed',
+                  grinded: 'grinded through',
+                  endured: 'passed through',
+                  bypassed: 'bypassed',
+                  killer: '💀 killer',
+                };
+                return (
+                  <span
+                    key={i}
+                    className={`text-xs px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 ${colorMap[enc.outcome] ?? 'text-zinc-500'}`}
+                    title={`${enc.name} at ${enc.atKm}km — ${labelMap[enc.outcome] ?? enc.outcome}${enc.damageTaken > 0 ? `, ${Math.round(enc.damageTaken)} dmg` : ''}`}
+                  >
+                    {enc.emoji} {labelMap[enc.outcome] ?? enc.outcome}
+                  </span>
+                );
+              })}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      <div className="flex flex-col gap-2 w-full">
-        {won ? (
-          <button
-            onClick={onNext}
-            className="w-full py-3 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-2xl font-bold text-lg hover:scale-[1.02] transition-transform"
-          >
-            NEXT ROUND →
-          </button>
-        ) : (
-          <button
-            onClick={onNext}
-            className="w-full py-3 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-2xl font-bold text-lg hover:scale-[1.02] transition-transform"
-          >
-            CONTINUE ({state.hearts} ❤️ left)
-          </button>
+        {/* Damage breakdown */}
+        {totalDmg > 0 && (
+          <div>
+            <div className="text-xs font-medium text-zinc-500 mb-2">Damage Sources</div>
+            {dmgBar('Impact', breakdown!.impact, 'bg-orange-500')}
+            {dmgBar('Zones', breakdown!.zone, 'bg-blue-500')}
+            {dmgBar('Grinding', breakdown!.grind, 'bg-red-500')}
+            {dmgBar('Mines', breakdown!.mines, 'bg-amber-500')}
+            <div className="text-xs text-zinc-400 mt-1 text-right">
+              Total: {totalDmg} damage
+            </div>
+          </div>
+        )}
+
+        {/* Stats grid */}
+        {summary && (
+          <div className="grid grid-cols-3 gap-2 text-xs pt-2 border-t border-zinc-100 dark:border-zinc-800">
+            <div className="text-center">
+              <div className="font-bold text-lg">{summary.reachedKm.toFixed(0)}</div>
+              <div className="text-zinc-400">km traveled</div>
+            </div>
+            <div className="text-center">
+              <div className="font-bold text-lg">{summary.bearsSmashed}</div>
+              <div className="text-zinc-400">bears smashed</div>
+            </div>
+            <div className="text-center">
+              <div className="font-bold text-lg">{sim?.timeSec ?? 0}s</div>
+              <div className="text-zinc-400">time elapsed</div>
+            </div>
+          </div>
         )}
       </div>
+
+      {/* Action */}
+      <button
+        onClick={onNext}
+        className="w-full py-3 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-2xl font-bold text-lg hover:scale-[1.02] transition-transform"
+      >
+        {won ? 'NEXT ROUND →' : `CONTINUE (${state.hearts} ❤️ left)`}
+      </button>
     </div>
   );
 }
@@ -774,12 +1077,22 @@ function ResultScreen({ state, onNext }: { state: GameState; onNext: () => void 
 function VictoryScreen({ state, onNewGame }: { state: GameState; onNewGame: () => void }) {
   return (
     <div className="flex-1 flex flex-col items-center justify-center p-6 gap-6 max-w-md mx-auto text-center">
-      <div className="text-8xl">👑🐻💥</div>
+      <div className="text-8xl">👑</div>
       <h2 className="text-4xl font-black">YOU WIN!</h2>
-      <p className="text-zinc-500">
-        All {MAX_ROUNDS} rounds conquered. Bears smashed: {state.totalBearsSmashed}. Total distance: {state.totalKm.toFixed(1)} km.
-      </p>
-      <p className="text-sm text-zinc-400">The bears have filed for bankruptcy. Their lawyer-goose was unavailable for comment.</p>
+      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 w-full space-y-2">
+        <p className="text-zinc-500">
+          All {MAX_ROUNDS} rounds conquered. The bear commander is in tears. The goose detail is filing a formal complaint.
+        </p>
+        <div className="grid grid-cols-2 gap-2 text-sm pt-2">
+          <div className="text-zinc-400 text-right">Total bears smashed</div>
+          <div className="font-bold text-left">{state.totalBearsSmashed}</div>
+          <div className="text-zinc-400 text-right">Total distance</div>
+          <div className="font-bold text-left">{state.totalKm.toFixed(0)} km</div>
+          <div className="text-zinc-400 text-right">Coins earned</div>
+          <div className="font-bold text-left">{state.coins}</div>
+        </div>
+      </div>
+      <p className="text-sm text-zinc-400 italic">&ldquo;The bears have filed for bankruptcy. Their lawyer-goose was unavailable for comment.&rdquo;</p>
       <button
         onClick={onNewGame}
         className="w-full py-3 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-2xl font-bold text-lg hover:scale-[1.02] transition-transform"
@@ -799,10 +1112,19 @@ function GameOverScreen({ state, onNewGame }: { state: GameState; onNewGame: () 
     <div className="flex-1 flex flex-col items-center justify-center p-6 gap-6 max-w-md mx-auto text-center">
       <div className="text-8xl">🪦</div>
       <h2 className="text-4xl font-black">GAME OVER</h2>
-      <p className="text-zinc-500">
-        The bears claim victory. You made it to round {state.round}/{MAX_ROUNDS} and smashed {state.totalBearsSmashed} bears.
-      </p>
-      <p className="text-sm text-zinc-400">A bear is writing a ballad about your defeat. It rhymes &ldquo;train&rdquo; with &ldquo;pain.&rdquo;</p>
+      <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 w-full space-y-2">
+        <p className="text-zinc-500">
+          The bears claim victory. You made it to <strong>round {state.round}/{MAX_ROUNDS}</strong> and smashed{' '}
+          <strong>{state.totalBearsSmashed} bears</strong>.
+        </p>
+        <div className="grid grid-cols-2 gap-2 text-sm pt-2">
+          <div className="text-zinc-400 text-right">Furthest round</div>
+          <div className="font-bold text-left">{state.round - 1}-km mark: {state.totalKm.toFixed(0)} km total</div>
+          <div className="text-zinc-400 text-right">Bears perished</div>
+          <div className="font-bold text-left">{state.totalBearsSmashed}</div>
+        </div>
+      </div>
+      <p className="text-sm text-zinc-400 italic">&ldquo;A bear is writing a ballad about your defeat. It rhymes &lsquo;train&rsquo; with &lsquo;pain.&rsquo;&rdquo;</p>
       <button
         onClick={onNewGame}
         className="w-full py-3 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-2xl font-bold text-lg hover:scale-[1.02] transition-transform"

@@ -29,13 +29,14 @@ Turn-based web game where player (train or bear) upgrades between rounds, then a
 lib/
   types.ts    — All game types (TrainStats, TrainTier, Mod, BearUnitSpec, SimResult, GameState, Phase...)
   catalog.ts  — Game data (trains, mods, bear units, balance constants, round formulas)
-  simulate.ts — Physics engine (NOT YET BUILT — next priority)
-  state.ts    — Game state machine (NOT YET BUILT)
-  ai.ts       — AI integration via Vercel AI SDK (NOT YET BUILT)
+  simulate.ts — Physics engine (discrete timestep, obstacle clearing, multi-run odds)
+  state.ts    — Game state machine (pure functions for game flow)
+  ai.ts       — AI integration via Vercel AI SDK (bear plan generation, custom upgrade validation)
 app/
-  page.tsx    — Entry point, game shell
+  page.tsx    — Entry point, game shell (all screens inline)
   layout.tsx  — Root layout
   globals.css — Tailwind v4 setup
+  actions.ts  — Server actions (wraps lib/ calls with error handling)
 ```
 
 ## Game flow

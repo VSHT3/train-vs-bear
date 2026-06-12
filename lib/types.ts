@@ -126,7 +126,24 @@ export interface SimObstacle {
   clearedT?: number; // when it was destroyed (blockers only)
 }
 
+export interface DamageBreakdown {
+  impact: number;
+  zone: number;
+  grind: number;
+  mines: number;
+}
+
+export interface ObstacleEncounter {
+  type: BearUnitType;
+  name: string;
+  emoji: string;
+  atKm: number;
+  outcome: 'vaporized' | 'smashed' | 'grinded' | 'endured' | 'bypassed' | 'killer';
+  damageTaken: number;
+}
+
 export interface SimResult {
+  seed: number;
   outcome: SimOutcome;
   reachedKm: number;
   targetKm: number;
@@ -137,6 +154,8 @@ export interface SimResult {
   events: SimEvent[];
   obstacles: SimObstacle[];
   finalHp: number;
+  damageBreakdown: DamageBreakdown;
+  obstacleEncounters: ObstacleEncounter[];
 }
 
 export interface Odds {
@@ -146,7 +165,8 @@ export interface Odds {
 
 // ---- meta game state ----
 
-export type Phase = 'title' | 'shop' | 'intel' | 'run' | 'result' | 'gameover' | 'victory';
+export type Phase = 'title' | 'shop' | 'intel' | 'run' | 'result' | 'roundIntro' | 'gameover' | 'victory';
+export type PlayerSide = 'train' | 'bear';
 
 export interface RoundOutcomeSummary {
   round: number;
@@ -157,6 +177,8 @@ export interface RoundOutcomeSummary {
 }
 
 export interface GameState {
+  side: PlayerSide | null;
+  seed: number;
   phase: Phase;
   round: number; // 1..MAX_ROUNDS
   hearts: number;
@@ -165,12 +187,12 @@ export interface GameState {
   trainId: string;
   modIds: string[];
   customMods: Mod[]; // AI-approved upgrades (installed, no slot needed, max 3)
+  bearPlacements: BearPlacement[];
+  bearBudget: number;
   plan: BearPlan | null;
   odds: Odds | null;
   sim: SimResult | null;
   lastSummary: RoundOutcomeSummary | null;
   totalBearsSmashed: number;
   totalKm: number;
-  aiAvailable: boolean | null; // null = unknown yet
-  muted: boolean;
 }

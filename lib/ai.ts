@@ -2,6 +2,7 @@ import { generateText, Output } from 'ai';
 import { z } from 'zod/v4';
 import type { BearPlan, BearPlacement, BearUnitType, Mod, ModFlag, TrainStats } from './types';
 import { BEAR_UNITS, bearBudgetForRound, MODS } from './catalog';
+import { createSeededRandom, type Seed } from './random';
 
 // ---- BEAR PLAN GENERATION ----
 
@@ -22,7 +23,6 @@ export async function generateBearPlan(
   round: number,
   trainStats: TrainStats,
   modNames: string[],
-  budget: number,
   targetKm: number,
   playerLostLast: boolean,
 ): Promise<BearPlan> {
@@ -49,7 +49,7 @@ You are facing a train with these stats:
 ${modNames.length > 0 ? `- Active mods: ${modNames.join(', ')}` : '- No mods installed'}
 
 Rules for your obstacle plan:
-1. Total cost must not exceed ${budgetActual} (you have up to ${budget} budget but AI can be creative)
+1. Total cost must not exceed ${budgetActual}
 2. Place obstacles between 2 km and ${targetKm - 1} km (leave warm-up and finish buffer)
 3. Mix blocker and zone types for variety
 4. Counter the train's weaknesses — low heat shield? Add lava whales. Low grip? Add honey/glue zones.
@@ -228,8 +228,10 @@ export function generatePresetPlan(
   round: number,
   targetKm: number,
   playerLostLast: boolean,
+  seed: Seed = `preset:${round}`,
 ): BearPlan {
   const budget = bearBudgetForRound(round, playerLostLast);
+  const random = createSeededRandom(seed);
 
   const presetStrategies: Array<{
     name: string;
@@ -338,16 +340,16 @@ export function generatePresetPlan(
 
     switch (strategy.spacing) {
       case 'frontloaded':
-        position = startKm + (Math.random() * usableDist * 0.3);
+        position = startKm + (random() * usableDist * 0.3);
         break;
       case 'backloaded':
-        position = startKm + usableDist * 0.6 + (Math.random() * usableDist * 0.4);
+        position = startKm + usableDist * 0.6 + (random() * usableDist * 0.4);
         break;
       case 'clustered':
-        position = startKm + usableDist * 0.3 + (Math.random() * usableDist * 0.4);
+        position = startKm + usableDist * 0.3 + (random() * usableDist * 0.4);
         break;
       default: // even
-        position = startKm + Math.random() * usableDist;
+        position = startKm + random() * usableDist;
     }
 
     placements.push({

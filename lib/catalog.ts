@@ -3,11 +3,24 @@ import type { BearUnitSpec, BearUnitType, Mod, TrainTier } from "./types";
 export const MAX_ROUNDS = 7;
 export const MAX_HEARTS = 3;
 export const MAX_CUSTOM_MODS = 3;
-export const START_COINS = 320;
+export const START_COINS = 500;
 export const START_POINTS = 0;
 
 export function targetKmForRound(round: number): number {
   return 8 + 6 * (round - 1); // round 7 = 44 km
+}
+
+export function trainLoadoutForRound(round: number): { trainId: string; modIds: string[] } {
+  const loadouts = [
+    { trainId: "handcar", modIds: ["cowcatcher"] },
+    { trainId: "rusty", modIds: ["hull", "nitro"] },
+    { trainId: "diesel", modIds: ["reactive", "cowcatcher", "sweeper"] },
+    { trainId: "thomas", modIds: ["teflon", "laser", "hull"] },
+    { trainId: "voltline", modIds: ["reactive", "heatTiles", "jammer", "nanobots"] },
+    { trainId: "bullet", modIds: ["forcefield", "laser", "sweeper", "acidwax"] },
+    { trainId: "alfax", modIds: ["forcefield", "laser", "nanobots", "teflon", "horn"] },
+  ];
+  return loadouts[Math.min(Math.max(round, 1), loadouts.length) - 1];
 }
 
 export function bearBudgetForRound(

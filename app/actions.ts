@@ -3,19 +3,18 @@
 import { generateBearPlan, generatePresetPlan, validateCustomUpgrade } from '@/lib/ai';
 import { activeModEffects, activeModFlags } from '@/lib/state';
 import { composeStats, calculateOdds } from '@/lib/simulate';
-import { getTrain } from '@/lib/catalog';
+import { getTrain, targetKmForRound } from '@/lib/catalog';
 import type { BearPlan, GameState, Mod, TrainStats } from '@/lib/types';
 
 export async function getBearPlan(
   round: number,
   trainStats: TrainStats,
   modNames: string[],
-  budget: number,
   targetKm: number,
   playerLostLast: boolean,
 ): Promise<BearPlan> {
   try {
-    return await generateBearPlan(round, trainStats, modNames, budget, targetKm, playerLostLast);
+    return await generateBearPlan(round, trainStats, modNames, targetKm, playerLostLast);
   } catch {
     return generatePresetPlan(round, targetKm, playerLostLast);
   }

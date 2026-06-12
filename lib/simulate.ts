@@ -1,8 +1,9 @@
-import type { BearPlacement, ModFlag, SimEvent, SimFrame, SimObstacle, SimResult, TrainStats } from './types';
+import type { BearPlacement, BearUnitType, ModFlag, ObstacleEncounter, SimEvent, SimFrame, SimObstacle, SimResult, TrainStats } from './types';
 import { BEAR_UNITS } from './catalog';
+import { createSeededRandom, deriveSeed, normalizeSeed, type Seed } from './random';
 
 const DT = 0.1; // seconds per tick
-const DEFAULT_MAX_SEC = 300;
+const DEFAULT_MAX_SEC = 600;
 const WEAPON_RANGE_KM = 0.15; // energy weapon reaches 150m ahead
 
 interface LiveObstacle extends SimObstacle {
@@ -16,10 +17,12 @@ export function runSimulation(
   modFlags: ModFlag[],
   placements: BearPlacement[],
   targetKm: number,
-  options?: { maxTimeSec?: number; dt?: number },
+  options?: { maxTimeSec?: number; dt?: number; seed?: Seed },
 ): SimResult {
   const dt = options?.dt ?? DT;
   const maxTime = options?.maxTimeSec ?? DEFAULT_MAX_SEC;
+  const seed = normalizeSeed(options?.seed);
+  const random = createSeededRandom(seed);
 
   // Build live obstacles sorted by position
   const live: LiveObstacle[] = placements
@@ -49,6 +52,16 @@ export function runSimulation(
   let bearsSmashed = 0;
   let totalDamage = 0;
 
+  // Damage tracking per source
+  let impactDmg = 0;
+  let zoneDmg = 0;
+  let grindDmg = 0;
+  let mineDmg = 0;
+
+  // Obstacle encounters & zone entry tracking
+  const encounters: ObstacleEncounter[] = [];
+  const enteredZones = new Set<number>();
+
   const frames: SimFrame[] = [];
   const events: SimEvent[] = [];
   let frameTimer = 0;
@@ -56,8 +69,8 @@ export function runSimulation(
   const hasFlag = (f: ModFlag) => modFlags.includes(f);
 
   const reduceDmg = (dmg: number, isHeat = false) => {
-    if (isHeat) return dmg * (1 - Math.min(trainStats.heatShield, 0.95));
-    return dmg * (1 - Math.min(trainStats.armor, 0.95));
+    if (isHeat) return dmg * (1 - Math.min(Math.max(trainStats.heatShield, 0), 0.95));
+    return dmg * (1 - Math.min(Math.max(trainStats.armor, 0), 0.8));
   };
 
   // Record frame every ~500ms sim-time
@@ -95,14 +108,53 @@ export function runSimulation(
       const spec = BEAR_UNITS[obs.type];
 
       // Drone jammer — nullifies droneSwarm entirely
-      if (obs.type === 'droneSwarm' && hasFlag('droneJammer')) continue;
+      if (obs.type === 'droneSwarm' && hasFlag('droneJammer')) {
+        if (!enteredZones.has(obs.id)) {
+          enteredZones.add(obs.id);
+          events.push({
+            t: Math.round(t * 10) / 10,
+            km: Math.round(km * 1000) / 1000,
+            kind: 'info',
+            text: `📡 Drone Jammer neutralized ${spec.emoji} ${spec.name} — drones confused by smooth jazz`,
+          });
+          encounters.push({
+            type: obs.type as BearUnitType,
+            name: spec.name,
+            emoji: spec.emoji,
+            atKm: obs.km,
+            outcome: 'bypassed',
+            damageTaken: 0,
+          });
+        }
+        continue;
+      }
+
+      // First entry into this zone?
+      if (!enteredZones.has(obs.id)) {
+        enteredZones.add(obs.id);
+        const entryEvent = {
+          t: Math.round(t * 10) / 10,
+          km: Math.round(km * 1000) / 1000,
+          kind: 'info' as const,
+          text: `🚧 Entered ${spec.emoji} ${spec.name} zone (${obs.lengthKm} km)`,
+        };
+        events.push(entryEvent);
+        encounters.push({
+          type: obs.type as BearUnitType,
+          name: spec.name,
+          emoji: spec.emoji,
+          atKm: obs.km,
+          outcome: 'endured',
+          damageTaken: 0,
+        });
+      }
 
       if (spec.zoneDps) {
         zoneDps += spec.zoneDps * obs.count;
         underFire = true;
       }
       if (spec.stickiness) {
-        totalSticky += spec.stickiness;
+        totalSticky += spec.stickiness * obs.count;
       }
 
       // Mines (polarMinefield)
@@ -111,10 +163,11 @@ export function runSimulation(
         // Use distance moved as basis so it's proportional to travel
         const distKm = (speed / 3600) * dt;
         const expectedHits = spec.minesPerKm * distKm;
-        if (expectedHits > 0 && Math.random() < expectedHits) {
+        if (expectedHits > 0 && random() < expectedHits) {
           const dmg = reduceDmg(spec.mineDamage);
           hp -= dmg;
           totalDamage += dmg;
+          mineDmg += dmg;
           events.push({
             t: Math.round(t * 10) / 10,
             km: Math.round(km * 1000) / 1000,
@@ -130,6 +183,7 @@ export function runSimulation(
       const dmg = zoneDps * dt;
       hp -= dmg;
       totalDamage += dmg;
+      zoneDmg += dmg;
     }
 
     // 2. Compute effective top speed (sticky reduction)
@@ -152,7 +206,7 @@ export function runSimulation(
     km += distKm;
 
     // 5. Regeneration (only when not grinding — nanobots need relative peace)
-    if (trainStats.regen > 0 && !grinding) {
+    if (hp > 0 && trainStats.regen > 0 && !grinding) {
       hp = Math.min(hp + trainStats.regen * dt, trainStats.maxHp);
     }
 
@@ -172,11 +226,20 @@ export function runSimulation(
         if (obs.totalMass <= 0 && prevTotal > 0) {
           obs.done = true;
           bearsSmashed += obs.initialCount;
+          const spec = BEAR_UNITS[obs.type];
           events.push({
             t: Math.round(t * 10) / 10,
             km: Math.round(km * 1000) / 1000,
             kind: 'clear',
-            text: `🔫 Energy weapon vaporized ${BEAR_UNITS[obs.type].emoji} ${BEAR_UNITS[obs.type].name} ×${obs.initialCount} before contact!`,
+            text: `🔫 Energy weapon vaporized ${spec.emoji} ${spec.name} ×${obs.initialCount} before contact!`,
+          });
+          encounters.push({
+            type: obs.type as BearUnitType,
+            name: spec.name,
+            emoji: spec.emoji,
+            atKm: obs.km,
+            outcome: 'vaporized',
+            damageTaken: 0,
           });
         }
       }
@@ -200,6 +263,14 @@ export function runSimulation(
             km: Math.round(km * 1000) / 1000,
             kind: 'info',
             text: '🪿 The geese flee from Goose-B-Gone™! Honk of retreat!',
+          });
+          encounters.push({
+            type: obs.type as BearUnitType,
+            name: spec.name,
+            emoji: spec.emoji,
+            atKm: obs.km,
+            outcome: 'bypassed',
+            damageTaken: 0,
           });
           continue;
         }
@@ -231,6 +302,7 @@ export function runSimulation(
           const actual = reduceDmg(impact, isHeat && !hasFlag('acidProof'));
           hp -= actual;
           totalDamage += actual;
+          impactDmg += actual;
 
           events.push({
             t: Math.round(t * 10) / 10,
@@ -244,10 +316,26 @@ export function runSimulation(
         if (obs.totalMass > 0) {
           grinding = obs;
           obs.contactT = Math.round(t * 10) / 10;
+          encounters.push({
+            type: obs.type as BearUnitType,
+            name: spec.name,
+            emoji: spec.emoji,
+            atKm: obs.km,
+            outcome: 'grinded',
+            damageTaken: 0,
+          });
         } else {
           obs.done = true;
           obs.clearedT = Math.round(t * 10) / 10;
           bearsSmashed += obs.initialCount;
+          encounters.push({
+            type: obs.type as BearUnitType,
+            name: spec.name,
+            emoji: spec.emoji,
+            atKm: obs.km,
+            outcome: 'smashed',
+            damageTaken: 0,
+          });
         }
         break; // Only engage one blocker at a time
       }
@@ -272,6 +360,7 @@ export function runSimulation(
         const dmg = reduceDmg(dps * dt, isHeat && !hasFlag('acidProof'));
         hp -= dmg;
         totalDamage += dmg;
+        grindDmg += dmg;
       }
 
       // Block cleared?
@@ -310,7 +399,7 @@ export function runSimulation(
         kind: 'win',
         text: `🏁 Reached ${targetKm} km! The bears are defeated!`,
       });
-      return buildResult('win', km, targetKm, t, bearsSmashed, totalDamage, hp, frames, events, live);
+      return buildResult(seed, 'win', km, targetKm, t, bearsSmashed, totalDamage, hp, frames, events, live, impactDmg, zoneDmg, grindDmg, mineDmg, encounters);
     }
 
     // 11. Loss — destroyed
@@ -322,7 +411,7 @@ export function runSimulation(
         kind: 'fail',
         text: '💀 The train has been completely destroyed. Bears are doing a victory dance. It is not graceful.',
       });
-      return buildResult('destroyed', km, targetKm, t, bearsSmashed, totalDamage, 0, frames, events, live);
+      return buildResult(seed, 'destroyed', km, targetKm, t, bearsSmashed, totalDamage, 0, frames, events, live, impactDmg, zoneDmg, grindDmg, mineDmg, encounters);
     }
 
     // 12. Loss — stalled (only after 5 seconds grace to allow initial acceleration)
@@ -333,7 +422,7 @@ export function runSimulation(
         kind: 'fail',
         text: '🛑 The train has stalled. Bears consider this a win. One bear is already writing a memoir.',
       });
-      return buildResult('stalled', km, targetKm, t, bearsSmashed, totalDamage, hp, frames, events, live);
+      return buildResult(seed, 'stalled', km, targetKm, t, bearsSmashed, totalDamage, hp, frames, events, live, impactDmg, zoneDmg, grindDmg, mineDmg, encounters);
     }
 
     t += dt;
@@ -346,10 +435,11 @@ export function runSimulation(
     kind: 'fail',
     text: '⏰ Time ran out! The bears stalled you long enough. They are very proud.',
   });
-  return buildResult('timeout', km, targetKm, t, bearsSmashed, totalDamage, hp, frames, events, live);
+  return buildResult(seed, 'timeout', km, targetKm, t, bearsSmashed, totalDamage, hp, frames, events, live, impactDmg, zoneDmg, grindDmg, mineDmg, encounters);
 }
 
 function buildResult(
+  seed: number,
   outcome: SimResult['outcome'],
   km: number,
   targetKm: number,
@@ -360,6 +450,11 @@ function buildResult(
   frames: SimFrame[],
   events: SimEvent[],
   live: LiveObstacle[],
+  impactDmg = 0,
+  zoneDmg = 0,
+  grindDmg = 0,
+  mineDmg = 0,
+  encounters: ObstacleEncounter[] = [],
 ): SimResult {
   // Convert LiveObstacle[] to SimObstacle[] for output
   const obstacles: SimObstacle[] = live.map((o) => ({
@@ -374,6 +469,7 @@ function buildResult(
   }));
 
   return {
+    seed,
     outcome,
     reachedKm: Math.round(km * 1000) / 1000,
     targetKm,
@@ -384,6 +480,13 @@ function buildResult(
     events,
     obstacles,
     finalHp: Math.round(hp),
+    damageBreakdown: {
+      impact: Math.round(impactDmg),
+      zone: Math.round(zoneDmg),
+      grind: Math.round(grindDmg),
+      mines: Math.round(mineDmg),
+    },
+    obstacleEncounters: encounters,
   };
 }
 
@@ -395,10 +498,14 @@ export function calculateOdds(
   placements: BearPlacement[],
   targetKm: number,
   runs = 20,
+  seed: Seed = 'odds',
 ): { trainWinPct: number; runs: number } {
   let wins = 0;
   for (let i = 0; i < runs; i++) {
-    const result = runSimulation(trainStats, modFlags, placements, targetKm, { maxTimeSec: 180 });
+    const result = runSimulation(trainStats, modFlags, placements, targetKm, {
+      maxTimeSec: 600,
+      seed: deriveSeed(seed, i),
+    });
     if (result.outcome === 'win') wins++;
   }
   return { trainWinPct: Math.round((wins / runs) * 100), runs };
