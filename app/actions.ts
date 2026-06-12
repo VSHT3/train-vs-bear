@@ -4,6 +4,7 @@ import { generateBearPlan, generatePresetPlan, validateCustomUpgrade } from '@/l
 import { activeModEffects, activeModFlags } from '@/lib/state';
 import { composeStats, calculateOdds } from '@/lib/simulate';
 import { getTrain, targetKmForRound } from '@/lib/catalog';
+import type { Seed } from '@/lib/random';
 import type { BearPlan, GameState, Mod, TrainStats } from '@/lib/types';
 
 export async function getBearPlan(
@@ -12,11 +13,12 @@ export async function getBearPlan(
   modNames: string[],
   targetKm: number,
   playerLostLast: boolean,
+  seed: Seed,
 ): Promise<BearPlan> {
   try {
     return await generateBearPlan(round, trainStats, modNames, targetKm, playerLostLast);
   } catch {
-    return generatePresetPlan(round, targetKm, playerLostLast);
+    return generatePresetPlan(round, targetKm, playerLostLast, seed);
   }
 }
 
@@ -24,8 +26,9 @@ export async function getPresetPlan(
   round: number,
   targetKm: number,
   playerLostLast: boolean,
+  seed: Seed,
 ): Promise<BearPlan> {
-  return generatePresetPlan(round, targetKm, playerLostLast);
+  return generatePresetPlan(round, targetKm, playerLostLast, seed);
 }
 
 export async function evaluateCustomUpgrade(
@@ -49,5 +52,5 @@ export async function computeOdds(
   const stats = composeStats(train.base, mods);
   const flags = activeModFlags(state);
 
-  return calculateOdds(stats, flags, plan.placements, 8 + 6 * (state.round - 1), 30);
+  return calculateOdds(stats, flags, plan.placements, targetKmForRound(state.round), 30, state.seed);
 }

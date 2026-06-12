@@ -278,11 +278,13 @@ export function activeModEffects(state: GameState) {
 }
 
 export function canAffordTrain(state: GameState, trainId: string): boolean {
+  if (state.side !== 'train') return false;
   const train = getTrain(trainId);
   return !!train && state.coins >= train.cost;
 }
 
 export function canAffordMod(state: GameState, modId: string): boolean {
+  if (state.side !== 'train') return false;
   const mod = getMod(modId);
   if (!mod) return false;
   if (state.modIds.includes(modId)) return false;

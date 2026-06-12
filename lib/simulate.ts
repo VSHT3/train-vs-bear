@@ -162,7 +162,7 @@ export function runSimulation(
         // Deterministic mine check: expected hits per tick = minesPerKm * (speed_km/s) * dt
         // Use distance moved as basis so it's proportional to travel
         const distKm = (speed / 3600) * dt;
-        const expectedHits = spec.minesPerKm * distKm;
+        const expectedHits = spec.minesPerKm * obs.count * distKm;
         if (expectedHits > 0 && random() < expectedHits) {
           const dmg = reduceDmg(spec.mineDamage);
           hp -= dmg;
