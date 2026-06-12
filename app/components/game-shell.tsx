@@ -12,18 +12,27 @@ import {
   simulationSeed,
 } from '@/lib/state';
 import { composeStats } from '@/lib/simulate';
-import type { BearUnitType, Mod, PlayerSide, SimResult } from '@/lib/types';
+import type { BearUnitType, Mod, PlayerSide, ReplayPayload, SimResult } from '@/lib/types';
 import { GameOverScreen } from './game-over-screen';
 import { HowToPlayModal } from './how-to-play-modal';
 import { IntelScreen } from './intel-screen';
 import { ResultScreen } from './result-screen';
+import { ReplayScreen } from './replay-screen';
 import { RoundIntroScreen } from './round-intro-screen';
 import { RunScreen } from './run-screen';
 import { ShopScreen } from './shop-screen';
 import { TitleScreen } from './title-screen';
 import { VictoryScreen } from './victory-screen';
 
-export function GameShell({ initialSeed }: { initialSeed: number | null }) {
+export function GameShell({
+  initialSeed,
+  initialReplay,
+  replayInvalid,
+}: {
+  initialSeed: number | null;
+  initialReplay: ReplayPayload | null;
+  replayInvalid: boolean;
+}) {
   const [state, dispatch] = useReducer(gameReducer, initialSeed, (seed) => createGame(seed ?? 'train-vs-bear'));
   const [customPrompt, setCustomPrompt] = useState('');
   const [customResult, setCustomResult] = useState<Mod | { valid: false; reason: string } | null>(null);
@@ -31,6 +40,7 @@ export function GameShell({ initialSeed }: { initialSeed: number | null }) {
   const [intelLoading, setIntelLoading] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [showFirstTutorial, setShowFirstTutorial] = useState(true);
+  const [replayDismissed, setReplayDismissed] = useState(false);
 
   const train = getTrain(state.trainId);
   const installedMods = state.modIds.map((id) => getMod(id)).filter((mod) => mod !== undefined);
@@ -94,6 +104,20 @@ export function GameShell({ initialSeed }: { initialSeed: number | null }) {
     setCustomResult(null);
   };
 
+  if (initialReplay && !replayDismissed) {
+    return (
+      <div className="flex flex-col min-h-full bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
+        <header className="flex items-center justify-between gap-2 px-6 py-3 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
+          <h1 className="text-lg font-bold tracking-tight">🚂 TRAIN <span className="text-zinc-400">vs</span> 🐻 BEAR</h1>
+          <span className="text-xs text-zinc-400">Shared replay · round {initialReplay.round}</span>
+        </header>
+        <main id="main-content" className="flex-1 flex flex-col">
+          <ReplayScreen payload={initialReplay} onExit={() => setReplayDismissed(true)} />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col min-h-full bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100">
       <header className="flex flex-wrap items-center justify-between gap-2 px-6 py-3 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
@@ -112,6 +136,11 @@ export function GameShell({ initialSeed }: { initialSeed: number | null }) {
       </header>
 
       <main id="main-content" className="flex-1 flex flex-col">
+        {replayInvalid && state.phase === 'title' && (
+          <div className="mx-auto mt-6 max-w-lg rounded-xl border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/20 px-4 py-3 text-sm text-red-700 dark:text-red-300">
+            This replay link is invalid, unsupported, or too large.
+          </div>
+        )}
         {state.phase === 'title' && <TitleScreen onStart={startGame} onHelp={() => setShowHelp(true)} />}
         {state.phase === 'roundIntro' && <RoundIntroScreen round={state.round} onDismiss={() => dispatch({ type: 'dismissRoundIntro' })} />}
         {state.phase === 'shop' && (

@@ -1,5 +1,6 @@
 import { MAX_ROUNDS } from '@/lib/catalog';
 import type { GameState } from '@/lib/types';
+import { CopyReplayButton } from './copy-replay-button';
 
 export function VictoryScreen({ state, onNewGame }: { state: GameState; onNewGame: () => void }) {
   const bear = state.side === 'bear';
@@ -13,9 +14,10 @@ export function VictoryScreen({ state, onNewGame }: { state: GameState; onNewGam
         </p>
         <p className="font-bold">{state.totalKm.toFixed(0)} km simulated · {state.totalBearsSmashed} bears cleared</p>
       </div>
-      <button onClick={onNewGame} className="w-full py-3 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-2xl font-bold text-lg">
-        PLAY AGAIN
-      </button>
+      <div className="grid grid-cols-2 gap-3 w-full">
+        <CopyReplayButton state={state} className="py-3 border border-zinc-200 dark:border-zinc-700 rounded-2xl font-medium" />
+        <button onClick={onNewGame} className="py-3 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-2xl font-bold text-lg">PLAY AGAIN</button>
+      </div>
     </div>
   );
 }

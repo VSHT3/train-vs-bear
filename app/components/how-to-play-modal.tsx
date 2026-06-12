@@ -3,7 +3,7 @@ const HELP_SECTIONS = [
   ['🚂', 'Train side', 'Buy trains and mods, inspect the bear plan, then try to reach the finish line.'],
   ['🐻', 'Bear side', 'Spend bear credits to place blockers and zones, inspect the incoming train, then defend the finish line.'],
   ['🪙', 'Resources', 'Train crews spend coins and stars. Bear command receives a fresh defense budget each round.'],
-  ['🔁', 'Seeded replays', 'Every campaign and simulation has a seed. Share it to reproduce random mine outcomes and preset layouts.'],
+  ['🔁', 'True replays', 'Share a complete run with the exact train stats, flags, bear plan, perspective, target distance, and simulation seed.'],
 ];
 
 export function HowToPlayModal({ onClose }: { onClose: () => void }) {

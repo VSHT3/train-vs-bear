@@ -158,6 +158,24 @@ export interface SimResult {
   obstacleEncounters: ObstacleEncounter[];
 }
 
+export interface ReplayTrain {
+  id: string;
+  name: string;
+  emoji: string;
+}
+
+export interface ReplayPayload {
+  version: 1;
+  side: PlayerSide;
+  round: number;
+  train: ReplayTrain;
+  trainStats: TrainStats;
+  modFlags: ModFlag[];
+  plan: BearPlan;
+  targetKm: number;
+  simulationSeed: number;
+}
+
 export interface Odds {
   trainWinPct: number; // 0..100
   runs: number;

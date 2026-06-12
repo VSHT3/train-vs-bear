@@ -1,5 +1,6 @@
 import { getTrain } from '@/lib/catalog';
 import type { GameState } from '@/lib/types';
+import { CopyReplayButton } from './copy-replay-button';
 
 export function ResultScreen({ state, onNext }: { state: GameState; onNext: () => void }) {
   const sim = state.sim;
@@ -61,9 +62,12 @@ export function ResultScreen({ state, onNext }: { state: GameState; onNext: () =
         <p className="text-xs text-zinc-400 text-center">Replay seed {sim.seed}</p>
       </div>
 
-      <button onClick={onNext} className="w-full py-3 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-2xl font-bold text-lg">
-        NEXT ROUND →
-      </button>
+      <div className="grid grid-cols-2 gap-3 w-full">
+        <CopyReplayButton state={state} className="py-3 border border-zinc-200 dark:border-zinc-700 rounded-2xl font-medium" />
+        <button onClick={onNext} className="py-3 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-2xl font-bold text-lg">
+          NEXT ROUND →
+        </button>
+      </div>
     </div>
   );
 }
