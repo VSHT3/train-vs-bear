@@ -3,7 +3,6 @@ import type {
   BearUnitType,
   GameState,
   Mod,
-  Odds,
   Phase,
   PlayerSide,
   RoundOutcomeSummary,
@@ -189,9 +188,8 @@ export function buildPlayerBearPlan(state: GameState): BearPlan {
 export function setIntel(
   state: GameState,
   plan: BearPlan,
-  odds: Odds,
 ): GameState {
-  return { ...state, phase: 'intel', plan, odds };
+  return { ...state, phase: 'intel', plan, odds: null };
 }
 
 // ---- RUN ----
@@ -303,7 +301,7 @@ export type GameAction =
   | { type: 'removeMod'; modId: string }
   | { type: 'addCustomMod'; mod: Mod }
   | { type: 'setPhase'; phase: Phase }
-  | { type: 'setIntel'; plan: BearPlan; odds: Odds }
+  | { type: 'setIntel'; plan: BearPlan }
   | { type: 'startRun' }
   | { type: 'finishRun'; sim: SimResult }
   | { type: 'nextRound' }
@@ -326,7 +324,7 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     case 'setPhase':
       return setPhase(state, action.phase);
     case 'setIntel':
-      return setIntel(state, action.plan, action.odds);
+      return setIntel(state, action.plan);
     case 'startRun':
       return startRun(state);
     case 'finishRun':

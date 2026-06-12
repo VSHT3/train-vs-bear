@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useReducer, useState } from 'react';
-import { computeOdds, evaluateCustomUpgrade, getBearPlan } from '@/app/actions';
+import { evaluateCustomUpgrade, getBearPlan } from '@/app/actions';
 import { getMod, getTrain, MAX_HEARTS, MAX_ROUNDS, targetKmForRound } from '@/lib/catalog';
 import {
   activeModEffects,
@@ -69,8 +69,7 @@ export function GameShell({
         state.lastSummary?.outcome !== 'win' && state.round > 1,
         simulationSeed(state),
       );
-    const odds = await computeOdds(state, plan);
-    dispatch({ type: 'setIntel', plan, odds });
+    dispatch({ type: 'setIntel', plan });
     setIntelLoading(false);
   };
 

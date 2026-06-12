@@ -108,7 +108,7 @@ export function SimulationPlayback({
   };
 
   return (
-    <div className={`flex-1 flex flex-col p-6 gap-4 max-w-3xl mx-auto w-full ${shake ? 'animate-[shake_0.3s_ease-in-out]' : ''}`}>
+    <div className={`flex-1 flex flex-col p-6 gap-4 max-w-5xl mx-auto w-full ${shake ? 'animate-[shake_0.3s_ease-in-out]' : ''}`}>
       <style>{`
         @keyframes shake {
           0%, 100% { transform: translateX(0); }
