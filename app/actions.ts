@@ -1,6 +1,6 @@
 'use server';
 
-import { generateBearPlan, generatePresetPlan, validateCustomUpgrade } from '@/lib/ai';
+import { generatePresetPlan, generateTacticalPlan, validateCustomUpgrade } from '@/lib/ai';
 import type { Seed } from '@/lib/random';
 import type { BearPlan, Mod, TrainStats } from '@/lib/types';
 
@@ -13,9 +13,9 @@ export async function getBearPlan(
   seed: Seed,
 ): Promise<BearPlan> {
   try {
-    return await generateBearPlan(round, trainStats, modNames, targetKm, playerLostLast);
+    return generateTacticalPlan(round, trainStats, modNames, targetKm, playerLostLast, seed);
   } catch (error) {
-    console.error('[ai] bear plan generation failed, using preset:', error instanceof Error ? error.message : error);
+    console.error('[tactical] plan generation failed, using preset:', error instanceof Error ? error.message : error);
     return generatePresetPlan(round, targetKm, playerLostLast, seed);
   }
 }

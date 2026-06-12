@@ -91,7 +91,7 @@ export interface BearPlan {
   taunt: string;
   strategy: string;
   placements: BearPlacement[];
-  source: 'ai' | 'preset';
+  source: 'ai' | 'preset' | 'tactical';
 }
 
 // ---- simulation output ----

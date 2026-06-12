@@ -127,7 +127,7 @@ function validateModFlags(value: unknown): ModFlag[] | null {
 function validatePlan(value: unknown): BearPlan | null {
   if (!isRecord(value)) return null;
   if (!isShortString(value.name, 100) || !isShortString(value.taunt, 240) || !isShortString(value.strategy, 600)) return null;
-  if (value.source !== 'ai' && value.source !== 'preset') return null;
+  if (value.source !== 'ai' && value.source !== 'preset' && value.source !== 'tactical') return null;
   if (!Array.isArray(value.placements) || value.placements.length > 100) return null;
 
   const placements: BearPlacement[] = [];
