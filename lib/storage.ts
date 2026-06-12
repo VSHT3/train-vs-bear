@@ -44,6 +44,32 @@ export function hasSave(): boolean {
   }
 }
 
+export type AchievementId = 
+  | 'firstSteps' | 'bearlyScratch' | 'unstoppable' | 'bearpocalypse'
+  | 'thousandMiler' | 'fullSteam' | 'bearCommander' | 'doomtrain'
+  | 'customShop' | 'perfectionist';
+
+export interface Achievement {
+  id: AchievementId;
+  icon: string;
+  title: string;
+  desc: string;
+  unlockedAt?: number;
+}
+
+export const ACHIEVEMENT_DEFS: Record<AchievementId, { icon: string; title: string; desc: string }> = {
+  firstSteps: { icon: '👶', title: 'First Steps', desc: 'Complete your first game' },
+  bearlyScratch: { icon: '🩹', title: 'Bearly a Scratch', desc: 'Win a round without ever taking damage' },
+  unstoppable: { icon: '♾️', title: 'Unstoppable', desc: 'Reach freeplay wave 10' },
+  bearpocalypse: { icon: '🐻‍❄️', title: 'Bearpocalypse', desc: 'Smash 1,000 bears total' },
+  thousandMiler: { icon: '🎯', title: 'Thousand-Miler', desc: 'Cover 1,000 km total' },
+  fullSteam: { icon: '🚂', title: 'Full Steam', desc: 'Complete all 7 rounds as train' },
+  bearCommander: { icon: '🐻', title: 'Bear Commander', desc: 'Complete all 7 rounds as bear' },
+  doomtrain: { icon: '👹', title: 'DOOMTRAIN', desc: 'Win a game using the DOOMTRAIN' },
+  customShop: { icon: '✨', title: 'Custom Workshop', desc: 'Install 3 custom upgrades in one run' },
+  perfectionist: { icon: '💎', title: 'Perfectionist', desc: 'Win all 7 rounds without losing any hearts' },
+};
+
 export interface LifetimeStats {
   gamesStarted: number;
   gamesCompleted: number;
@@ -60,6 +86,9 @@ export interface LifetimeStats {
   bestRunSeed: number | null;
   bestRunRound: number;
   bestFreeplayWave: number;
+  achievements: AchievementId[];
+  // Perfectionist tracking
+  heartsLostThisRun: number;
 }
 
 export const EMPTY_STATS: LifetimeStats = {
@@ -78,6 +107,8 @@ export const EMPTY_STATS: LifetimeStats = {
   bestRunSeed: null,
   bestRunRound: 0,
   bestFreeplayWave: 0,
+  achievements: [],
+  heartsLostThisRun: 0,
 };
 
 export function loadStats(): LifetimeStats {
@@ -130,4 +161,28 @@ export function addLeaderboardEntry(entry: LeaderboardEntry): void {
   const entries = loadLeaderboard();
   entries.push(entry);
   saveLeaderboard(entries);
+}
+
+export function checkAchievements(stats: LifetimeStats): AchievementId[] {
+  const newlyUnlocked: AchievementId[] = [];
+  const unlocked = new Set(stats.achievements);
+
+  const check = (id: AchievementId, condition: boolean) => {
+    if (condition && !unlocked.has(id)) {
+      unlocked.add(id);
+      newlyUnlocked.push(id);
+    }
+  };
+
+  check('firstSteps', stats.gamesCompleted >= 1);
+  check('bearpocalypse', stats.totalBearsSmashed >= 1000);
+  check('thousandMiler', stats.totalKm >= 1000);
+  check('unstoppable', stats.bestFreeplayWave >= 10);
+
+  if (newlyUnlocked.length > 0) {
+    stats.achievements = [...unlocked];
+    saveStats(stats);
+  }
+
+  return newlyUnlocked;
 }
