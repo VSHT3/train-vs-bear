@@ -14,13 +14,16 @@ import {
 import { composeStats } from '@/lib/simulate';
 import { SoundToggle, useSound } from '@/lib/sound';
 import {
+  ACHIEVEMENT_DEFS,
   addLeaderboardEntry,
+  checkAchievements,
   deleteGame,
   loadGame,
   loadStats,
   hasSave,
   saveGame,
   saveStats,
+  type AchievementId,
 } from '@/lib/storage';
 import type { BearUnitType, Mod, PlayerSide, ReplayPayload, SimResult } from '@/lib/types';
 import { GameOverScreen } from './game-over-screen';
@@ -54,6 +57,7 @@ export function GameShell({
   const [replayDismissed, setReplayDismissed] = useState(false);
   const [showStats, setShowStats] = useState(false);
   const [showContinue, setShowContinue] = useState(false);
+  const [newAchievements, setNewAchievements] = useState<AchievementId[]>([]);
   const justLoaded = useRef(false);
   const { play } = useSound();
 
@@ -104,6 +108,9 @@ export function GameShell({
         seed: finalState.sim.seed,
       });
     }
+    const statsAfter = loadStats();
+    const unlocked = checkAchievements(statsAfter);
+    if (unlocked.length > 0) setNewAchievements(unlocked);
     deleteGame();
   }, []);
 
@@ -183,8 +190,10 @@ export function GameShell({
       s.bearGames++;
     }
     saveStats(s);
+    const unlocked = checkAchievements(s);
+    if (unlocked.length > 0) setNewAchievements(unlocked);
     saveGame({ ...current, sim });
-  }, []);
+  }, [play]);
 
   const nextRound = () => {
     play('horn');
@@ -281,6 +290,29 @@ export function GameShell({
       </main>
       {showHelp && <HowToPlayModal onClose={() => setShowHelp(false)} />}
       {showStats && <StatsDashboard onClose={() => setShowStats(false)} />}
+
+      {newAchievements.length > 0 && (
+        <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2 max-w-xs">
+          {newAchievements.map((id) => {
+            const def = ACHIEVEMENT_DEFS[id];
+            return (
+              <div key={id}
+                className="bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-2xl p-4 shadow-2xl animate-[slide-up_0.3s_ease-out] cursor-pointer"
+                onClick={() => setNewAchievements([])}
+              >
+                <div className="flex items-center gap-3">
+                  <span className="text-2xl">{def.icon}</span>
+                  <div>
+                    <div className="font-bold text-sm">🏅 Achievement Unlocked!</div>
+                    <div className="font-semibold text-sm">{def.title}</div>
+                    <div className="text-xs text-white/80">{def.desc}</div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

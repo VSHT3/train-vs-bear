@@ -63,7 +63,6 @@ export function runSimulation(
   // Obstacle encounters & zone entry tracking
   const encounters: ObstacleEncounter[] = [];
   const enteredZones = new Set<number>();
-  const zoneDamageAccum = new Map<number, number>(); // obstacle id -> accumulated zone dps damage
 
   const frames: SimFrame[] = [];
   const events: SimEvent[] = [];

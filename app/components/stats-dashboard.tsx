@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { loadLeaderboard, loadStats, type LeaderboardEntry, type LifetimeStats } from '@/lib/storage';
+import { ACHIEVEMENT_DEFS, loadLeaderboard, loadStats, type AchievementId, type LeaderboardEntry, type LifetimeStats } from '@/lib/storage';
 
 function formatTime(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -23,7 +23,7 @@ function timeAgo(ts: number): string {
 export function StatsDashboard({ onClose }: { onClose: () => void }) {
   const [stats] = useState<LifetimeStats>(() => loadStats());
   const [leaderboard] = useState<LeaderboardEntry[]>(() => loadLeaderboard());
-  const [tab, setTab] = useState<'lifetime' | 'leaderboard'>('lifetime');
+  const [tab, setTab] = useState<'lifetime' | 'leaderboard' | 'achievements'>('lifetime');
 
   const trainWinRate = stats.trainGames > 0 ? Math.round((stats.trainWins / stats.trainGames) * 100) : 0;
   const bearWinRate = stats.bearGames > 0 ? Math.round((stats.bearWins / stats.bearGames) * 100) : 0;
@@ -43,17 +43,13 @@ export function StatsDashboard({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="flex border-b border-zinc-100 dark:border-zinc-800">
-          <button
-            onClick={() => setTab('lifetime')}
-            className={`flex-1 py-3 text-sm font-medium text-center transition-colors ${tab === 'lifetime' ? 'text-zinc-900 dark:text-zinc-100 border-b-2 border-zinc-900 dark:border-zinc-100' : 'text-zinc-400 hover:text-zinc-600'}`}
-          >
-            Lifetime
-          </button>
-          <button
-            onClick={() => setTab('leaderboard')}
-            className={`flex-1 py-3 text-sm font-medium text-center transition-colors ${tab === 'leaderboard' ? 'text-zinc-900 dark:text-zinc-100 border-b-2 border-zinc-900 dark:border-zinc-100' : 'text-zinc-400 hover:text-zinc-600'}`}
-          >
-            Leaderboard
+          <button onClick={() => setTab('lifetime')}
+            className={`flex-1 py-3 text-sm font-medium text-center transition-colors ${tab === 'lifetime' ? 'text-zinc-900 dark:text-zinc-100 border-b-2 border-zinc-900 dark:border-zinc-100' : 'text-zinc-400 hover:text-zinc-600'}`}>Lifetime</button>
+          <button onClick={() => setTab('leaderboard')}
+            className={`flex-1 py-3 text-sm font-medium text-center transition-colors ${tab === 'leaderboard' ? 'text-zinc-900 dark:text-zinc-100 border-b-2 border-zinc-900 dark:border-zinc-100' : 'text-zinc-400 hover:text-zinc-600'}`}>Leaderboard</button>
+          <button onClick={() => setTab('achievements')}
+            className={`flex-1 py-3 text-sm font-medium text-center transition-colors ${tab === 'achievements' ? 'text-zinc-900 dark:text-zinc-100 border-b-2 border-zinc-900 dark:border-zinc-100' : 'text-zinc-400 hover:text-zinc-600'}`}>
+            🏅 {stats.achievements.length}/{Object.keys(ACHIEVEMENT_DEFS).length}
           </button>
         </div>
 
@@ -130,25 +126,41 @@ export function StatsDashboard({ onClose }: { onClose: () => void }) {
                 <p className="text-sm text-zinc-400 text-center py-8">No runs recorded yet. Finish a round to appear here!</p>
               )}
               {topEntries.map((entry, i) => (
-                <div
-                  key={`${entry.when}-${entry.seed}`}
-                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm ${i === 0 ? 'bg-amber-50 dark:bg-amber-950/20' : 'even:bg-zinc-50 dark:even:bg-zinc-800/20'}`}
-                >
+                <div key={`${entry.when}-${entry.seed}`}
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm ${i === 0 ? 'bg-amber-50 dark:bg-amber-950/20' : 'even:bg-zinc-50 dark:even:bg-zinc-800/20'}`}>
                   <span className={`w-6 text-center font-bold text-xs ${i === 0 ? 'text-amber-500' : 'text-zinc-400'}`}>
                     {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`}
                   </span>
                   <span className="text-base">{entry.side === 'train' ? '🚂' : '🐻'}</span>
                   <div className="flex-1 min-w-0">
-                    <div className="font-medium truncate">
-                      Round {entry.round} — {entry.won ? 'Won' : 'Lost'}
-                    </div>
-                    <div className="text-xs text-zinc-400">
-                      {entry.bearsSmashed} bears · {entry.totalKm.toFixed(1)} km · {formatTime(entry.timeSec)}
-                    </div>
+                    <div className="font-medium truncate">Round {entry.round} — {entry.won ? 'Won' : 'Lost'}</div>
+                    <div className="text-xs text-zinc-400">{entry.bearsSmashed} bears · {entry.totalKm.toFixed(1)} km · {formatTime(entry.timeSec)}</div>
                   </div>
                   <span className="text-xs text-zinc-400 whitespace-nowrap">{timeAgo(entry.when)}</span>
                 </div>
               ))}
+            </div>
+          )}
+
+          {tab === 'achievements' && (
+            <div className="space-y-2">
+              {(Object.keys(ACHIEVEMENT_DEFS) as AchievementId[]).map((id) => {
+                const def = ACHIEVEMENT_DEFS[id];
+                const unlocked = stats.achievements.includes(id);
+                return (
+                  <div key={id} className={`flex items-center gap-3 p-3 rounded-xl text-sm ${unlocked ? 'bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800' : 'bg-zinc-50 dark:bg-zinc-800/20 opacity-50'}`}>
+                    <span className="text-2xl">{unlocked ? def.icon : '🔒'}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold">{unlocked ? def.title : '???'}</div>
+                      <div className="text-xs text-zinc-400">{unlocked ? def.desc : 'Keep playing to discover this achievement'}</div>
+                    </div>
+                    {unlocked && <span className="text-xs text-amber-500 font-medium">✓</span>}
+                  </div>
+                );
+              })}
+              {stats.achievements.length === 0 && (
+                <p className="text-sm text-zinc-400 text-center py-8">No achievements yet. Complete games to unlock them!</p>
+              )}
             </div>
           )}
         </div>

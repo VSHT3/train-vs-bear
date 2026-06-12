@@ -1,21 +1,22 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { BEAR_UNITS, getTrain, MAX_ROUNDS } from '@/lib/catalog';
+import { getTrain, MAX_ROUNDS } from '@/lib/catalog';
 import { loadStats } from '@/lib/storage';
 import type { GameState, ObstacleEncounter } from '@/lib/types';
 import { CopyReplayButton } from './copy-replay-button';
 
 export function ResultScreen({ state, onNext }: { state: GameState; onNext: () => void }) {
   const [visible, setVisible] = useState(false);
-  const sim = state.sim;
-  const summary = state.lastSummary;
-  if (!sim || !summary) return null;
 
   useEffect(() => {
     const t = setTimeout(() => setVisible(true), 100);
     return () => clearTimeout(t);
   }, []);
+
+  const sim = state.sim;
+  const summary = state.lastSummary;
+  if (!sim || !summary) return null;
 
   const bearSide = state.side === 'bear';
   const trainWon = sim.outcome === 'win';
