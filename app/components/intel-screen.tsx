@@ -113,7 +113,7 @@ export function IntelScreen({
             <div className="bg-white dark:bg-zinc-900 border-2 border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="text-2xl font-bold">{plan.name}</h3>
-                <span className="text-sm text-zinc-400">{plan.source === 'ai' ? '🤖 live AI plan' : '📋 preset plan'}</span>
+                <span className="text-sm text-zinc-400">{plan.source === 'ai' ? '🤖 live AI plan' : plan.source === 'tactical' ? '🎯 tactical algorithm' : '📋 preset plan'}</span>
               </div>
               <p className="text-xl italic text-zinc-600 dark:text-zinc-400">&ldquo;{plan.taunt}&rdquo;</p>
               <p className="text-base text-zinc-500">{plan.strategy}</p>

@@ -427,3 +427,270 @@ export function generatePresetPlan(
     source: 'preset',
   };
 }
+
+// ---- TACTICAL PLAN GENERATION (no AI) ----
+
+const MAX_STATS: TrainStats = {
+  topSpeed: 520, accel: 26, maxHp: 3000, armor: 0.45,
+  plow: 120, grip: 0.6, heatShield: 0.5, energyWeapon: 50, regen: 6,
+};
+
+type WeaknessKey = 'lowHeatShield' | 'lowGrip' | 'lowArmor' | 'lowMaxHp' | 'lowPlow' | 'lowRegen' | 'lowEnergyWeapon' | 'lowTopSpeed' | 'lowAccel';
+
+const COUNTER_MAP: Record<WeaknessKey, BearUnitType[]> = {
+  lowHeatShield:   ['lavaWhale'],
+  lowGrip:         ['honeyZone', 'glueRiver'],
+  lowArmor:        ['explosiveBear', 'steelCube'],
+  lowMaxHp:        ['explosiveBear', 'bearpult'],
+  lowPlow:         ['armoredBear', 'jellyMonolith'],
+  lowRegen:        ['droneSwarm', 'beeSwarm'],
+  lowEnergyWeapon: ['armoredBear', 'bear'],
+  lowTopSpeed:     ['honeyZone', 'glueRiver', 'mirrorMaze'],
+  lowAccel:        ['gooseDetail', 'honeyZone'],
+};
+
+const FILLER_UNITS: BearUnitType[] = ['bear', 'gooseDetail', 'armoredBear', 'explosiveBear'];
+
+const STRATEGY_TEMPLATES: Record<WeaknessKey, { names: string[]; taunts: string[]; desc: string }> = {
+  lowHeatShield: {
+    names: ['Operation Hot Paw', 'The Floor is Lava', 'Thermal Payload', 'Bearly Lukewarm'],
+    taunts: ['Hope you brought sunscreen.', 'This track is well done.', 'Bears turn up the heat.'],
+    desc: 'Lava whales deployed to exploit thermal vulnerability.',
+  },
+  lowGrip: {
+    names: ['The Stick', 'Velcro Protocol', 'The Slow Zone', 'Glue Factory'],
+    taunts: ['You will go precisely nowhere.', 'Stick around, will you?', 'Slippery when dry.'],
+    desc: 'Maximum stickiness via honey floods and glue rivers.',
+  },
+  lowArmor: {
+    names: ['Operation Tin Can', 'Armor? What Armor?', 'The Nutcracker', 'Soft Target Protocol'],
+    taunts: ['Your armor is merely a suggestion.', 'We brought hammers.', 'Crunch time, train.'],
+    desc: 'High-impact units targeting weak armor plating.',
+  },
+  lowMaxHp: {
+    names: ['Glass Cannon Test', 'Operation Sudden Stop', 'The Delete Button', 'Fragile Express'],
+    taunts: ['One good hit and it\'s over.', 'Your HP bar is a countdown.', 'Bears love glass cannons.'],
+    desc: 'Burst-damage units designed to overwhelm low hull integrity.',
+  },
+  lowPlow: {
+    names: ['Operation Bear Pile', 'The Wall', 'Bear Jenga', 'Gridlock Protocol'],
+    taunts: ['You\'re not pushing through this.', 'Plow? Cute.', 'Welcome to the bear pile.'],
+    desc: 'High-mass obstacles the low-plow train will struggle to clear.',
+  },
+  lowRegen: {
+    names: ['Death by a Thousand Cuts', 'Attrition Protocol', 'The Grind', 'Operation Papercut'],
+    taunts: ['Every scratch counts.', 'You can\'t heal fast enough.', 'Slow and steady bear offense.'],
+    desc: 'Sustained damage zones exploiting negligible regeneration.',
+  },
+  lowEnergyWeapon: {
+    names: ['The Gauntlet', 'Blockade Protocol', 'Operation Bear Wall', 'No Laser No Pass'],
+    taunts: ['No energy weapon? Bold choice.', 'Every bear is a speed bump.', 'You\'ll have to earn every meter.'],
+    desc: 'Dense blocker formations — no pre-clearing means every bear must be rammed.',
+  },
+  lowTopSpeed: {
+    names: ['Operation Tar Pit', 'The Slow Cooker', 'Bear Traffic Jam', '5 km/h Express'],
+    taunts: ['Speed is no longer an option.', 'You will crawl.', 'The bears have all day.'],
+    desc: 'Sticky traps to reduce the already-low top speed to a standstill.',
+  },
+  lowAccel: {
+    names: ['Early Bird Protocol', 'Operation Welcome Mat', 'Bear Breakfast Club'],
+    taunts: ['No time to speed up.', 'Front-loaded. No mercy.', 'We meet you at the door.'],
+    desc: 'Obstacles placed early to exploit slow acceleration before the train builds speed.',
+  },
+};
+
+const STICKY_TYPES: BearUnitType[] = ['honeyZone', 'glueRiver', 'mirrorMaze'];
+const ZONE_DPS_TYPES: BearUnitType[] = ['droneSwarm', 'beeSwarm', 'bearNado'];
+const HEAVY_BLOCKERS: BearUnitType[] = ['megaUrsa', 'jellyMonolith', 'acidCube'];
+const BURST_BLOCKERS: BearUnitType[] = ['explosiveBear', 'bearpult', 'steelCube'];
+
+export function generateTacticalPlan(
+  round: number,
+  trainStats: TrainStats,
+  modNames: string[],
+  targetKm: number,
+  playerLostLast: boolean,
+  seed: Seed = `tactical:${round}`,
+): BearPlan {
+  const budget = bearBudgetForRound(round, playerLostLast);
+  const random = createSeededRandom(seed);
+
+  const weaknesses: { key: WeaknessKey; score: number }[] = ([
+    { key: 'lowHeatShield',   field: 'heatShield' },
+    { key: 'lowGrip',         field: 'grip' },
+    { key: 'lowArmor',        field: 'armor' },
+    { key: 'lowMaxHp',        field: 'maxHp' },
+    { key: 'lowPlow',         field: 'plow' },
+    { key: 'lowRegen',        field: 'regen' },
+    { key: 'lowEnergyWeapon', field: 'energyWeapon' },
+    { key: 'lowTopSpeed',     field: 'topSpeed' },
+    { key: 'lowAccel',        field: 'accel' },
+  ] as const).map(({ key, field }) => ({
+    key,
+    score: 1 - (trainStats[field] / MAX_STATS[field]),
+  })).sort((a, b) => b.score - a.score);
+
+  // Resolve active mod flags for counter-play adjustments
+  const activeFlags = new Set<ModFlag>();
+  for (const name of modNames) {
+    const mod = MODS.find((m) => m.name === name);
+    if (mod?.flags) mod.flags.forEach((f) => activeFlags.add(f));
+  }
+
+  let remaining = budget;
+  const shopping: Map<BearUnitType, number> = new Map();
+
+  function buy(type: BearUnitType, count: number): number {
+    const cost = BEAR_UNITS[type].cost * count;
+    if (cost > remaining) return 0;
+    remaining -= cost;
+    shopping.set(type, (shopping.get(type) ?? 0) + count);
+    return count;
+  }
+
+  // Allocate 45% / 30% / 15% to top 3 weaknesses above threshold
+  const activeWeaknesses = weaknesses.filter((w) => w.score > 0.25).slice(0, 3);
+  const totalScore = activeWeaknesses.reduce((s, w) => s + w.score, 0) || 1;
+  const allocPcts = [0.45, 0.30, 0.15];
+
+  for (let i = 0; i < activeWeaknesses.length && remaining > 0; i++) {
+    const weakness = activeWeaknesses[i];
+    const alloc = Math.floor(budget * allocPcts[i] * (weakness.score / totalScore));
+    let subBudget = Math.min(alloc, remaining);
+
+    const counters = COUNTER_MAP[weakness.key];
+    if (!counters || counters.length === 0) continue;
+
+    // Filter out units countered by mod flags
+    const effective = counters.filter((t) => {
+      if (activeFlags.has('droneJammer') && t === 'droneSwarm') return false;
+      if (activeFlags.has('mineSweeper') && t === 'polarMinefield') return false;
+      if (activeFlags.has('gooseRepellent') && t === 'gooseDetail') return false;
+      return true;
+    });
+
+    if (effective.length === 0) continue;
+
+    // Distribute across counter units (primary gets ~60%, rest split)
+    const primaryWeight = 0.6;
+    for (let j = 0; j < effective.length && subBudget > 0; j++) {
+      const unitType = effective[j];
+      const weight = j === 0 ? primaryWeight : (1 - primaryWeight) / (effective.length - 1);
+      let unitBudget = Math.floor(subBudget * weight);
+
+      // Reduce budget if countered by specific flags
+      if (activeFlags.has('acidProof') && unitType === 'acidCube') unitBudget = Math.floor(unitBudget * 0.4);
+      if (activeFlags.has('bearWhisperer') && BEAR_UNITS[unitType].organic) unitBudget = Math.floor(unitBudget * 0.5);
+
+      const cost = BEAR_UNITS[unitType].cost;
+      const count = Math.max(1, Math.floor(unitBudget / cost));
+      const actual = buy(unitType, Math.min(count, Math.floor(subBudget / cost)));
+      subBudget -= actual * cost;
+    }
+  }
+
+  // Spend remaining on filler units (max 3 extra types)
+  const fillerPool = FILLER_UNITS.filter((t) => {
+    if (activeFlags.has('gooseRepellent') && t === 'gooseDetail') return false;
+    if (activeFlags.has('bearWhisperer') && BEAR_UNITS[t].organic) return false;
+    return true;
+  });
+  let fillerIdx = 0;
+  while (remaining > 0 && shopping.size < 8) {
+    const filler = fillerPool[fillerIdx % fillerPool.length];
+    const cost = BEAR_UNITS[filler].cost;
+    if (remaining >= cost) {
+      buy(filler, 1);
+    } else {
+      break;
+    }
+    fillerIdx++;
+  }
+
+  // Ensure at least 2 unit types for variety
+  if (shopping.size < 2 && budget >= 200) {
+    const varietyPool: BearUnitType[] = ['honeyZone', 'beeSwarm', 'armoredBear', 'gooseDetail'];
+    for (const vt of varietyPool) {
+      if (shopping.has(vt)) continue;
+      if (activeFlags.has('gooseRepellent') && vt === 'gooseDetail') continue;
+      if (activeFlags.has('bearWhisperer') && BEAR_UNITS[vt].organic) continue;
+      const cost = BEAR_UNITS[vt].cost;
+      // Rebalance: take 1 bear away, add variety unit if possible
+      const bearCount = shopping.get('bear') ?? 0;
+      if (bearCount > 0 && cost <= remaining + BEAR_UNITS.bear.cost) {
+        shopping.set('bear', bearCount - 1);
+        remaining += BEAR_UNITS.bear.cost;
+        buy(vt, 1);
+        break;
+      }
+      if (remaining >= cost) { buy(vt, 1); break; }
+    }
+  }
+
+  // Place units strategically
+  const usableDist = targetKm - 3;
+  const startKm = 1.5;
+  const placements: BearPlacement[] = [];
+
+  for (const [type, totalCount] of shopping) {
+    if (totalCount <= 0) continue;
+
+    // Split large counts into multiple placements (max 1 placement per ~8 units)
+    const numPlacements = Math.max(1, Math.ceil(totalCount / 8));
+    const basePerPlacement = Math.floor(totalCount / numPlacements);
+    let leftover = totalCount - basePerPlacement * numPlacements;
+
+    for (let p = 0; p < numPlacements; p++) {
+      const count = basePerPlacement + (leftover > 0 ? 1 : 0);
+      if (leftover > 0) leftover--;
+
+      let position: number;
+      if (STICKY_TYPES.includes(type)) {
+        // Front half to slow train early
+        position = startKm + random() * usableDist * 0.4;
+      } else if (ZONE_DPS_TYPES.includes(type)) {
+        // Spread across full track
+        position = startKm + random() * usableDist;
+      } else if (HEAVY_BLOCKERS.includes(type)) {
+        // Back half — let the train get softened up first
+        position = startKm + usableDist * 0.5 + random() * usableDist * 0.5;
+      } else if (BURST_BLOCKERS.includes(type)) {
+        // Middle section — hit the train after stickies but before heavies
+        position = startKm + usableDist * 0.25 + random() * usableDist * 0.5;
+      } else {
+        // Mixed placement
+        position = startKm + random() * usableDist;
+      }
+
+      placements.push({ type, atKm: Math.round(position * 10) / 10, count });
+    }
+  }
+
+  placements.sort((a, b) => a.atKm - b.atKm);
+
+  const { name, taunt, strategy } = generateTacticalFlavor(weaknesses, shopping, round, budget, targetKm);
+
+  return { name, taunt, strategy, placements, source: 'tactical' };
+}
+
+function generateTacticalFlavor(
+  weaknesses: { key: WeaknessKey; score: number }[],
+  shopping: Map<BearUnitType, number>,
+  round: number,
+  budget: number,
+  targetKm: number,
+): { name: string; taunt: string; strategy: string } {
+  const primary = weaknesses[0]?.key ?? 'lowArmor';
+  const templates = STRATEGY_TEMPLATES[primary] ?? STRATEGY_TEMPLATES.lowArmor;
+
+  const name = templates.names[round % templates.names.length];
+  const taunt = templates.taunts[round % templates.taunts.length];
+
+  const unitSummary = [...shopping.entries()]
+    .map(([type, count]) => `${BEAR_UNITS[type].emoji} ${BEAR_UNITS[type].name} ×${count}`)
+    .join(', ');
+
+  const strategy = `${templates.desc} ${unitSummary}. Budget: ${budget} credits across ${targetKm} km.`;
+
+  return { name, taunt, strategy };
+}
