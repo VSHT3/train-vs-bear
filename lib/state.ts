@@ -1,6 +1,7 @@
 import type {
   BearPlan,
   BearUnitType,
+  BonusObjective,
   GameState,
   Mod,
   Phase,
@@ -10,7 +11,10 @@ import type {
 } from './types';
 import {
   BEAR_UNITS,
+  BEAR_UPGRADES,
+  COMMANDER_CARDS,
   bearBudgetForRound,
+  buildBearUpgradeOverrides,
   getMod,
   getTrain,
   MAX_CUSTOM_MODS,
@@ -18,12 +22,14 @@ import {
   MAX_ROUNDS,
   rewardForLoss,
   rewardForWin,
+  rollWaveModifier,
   START_COINS,
   START_POINTS,
   targetKmForRound,
   trainLoadoutForRound,
 } from './catalog';
 import { deriveSeed, normalizeSeed, type Seed } from './random';
+import { calculateOdds, composeStats } from './simulate';
 
 export function createGame(seed: Seed = 'train-vs-bear'): GameState {
   return {
@@ -46,6 +52,10 @@ export function createGame(seed: Seed = 'train-vs-bear'): GameState {
     totalBearsSmashed: 0,
     totalKm: 0,
     freeplay: false,
+    waveModifier: null,
+    bearUpgrades: {},
+    bonusObjectives: [],
+    commanderCard: null,
   };
 }
 
@@ -58,6 +68,7 @@ export function startGame(side: PlayerSide, seed: Seed = 'train-vs-bear'): GameS
     phase: 'shop',
     trainId: loadout?.trainId ?? state.trainId,
     modIds: loadout?.modIds ?? state.modIds,
+    bearUpgrades: {},
   };
 }
 
@@ -174,6 +185,33 @@ export function removeBearPlacement(state: GameState, index: number): GameState 
   };
 }
 
+export function buyBearUpgrade(state: GameState, upgradeId: string): GameState | null {
+  if (state.side !== 'bear') return null;
+  const upgrade = BEAR_UPGRADES.find((u) => u.id === upgradeId);
+  if (!upgrade) return null;
+  const currentLevel = state.bearUpgrades[upgradeId] ?? 0;
+  if (currentLevel >= upgrade.maxLevel) return null;
+  if (bearBudgetRemaining(state) < upgrade.cost) return null;
+  return {
+    ...state,
+    bearBudget: state.bearBudget - upgrade.cost,
+    bearUpgrades: { ...state.bearUpgrades, [upgradeId]: currentLevel + 1 },
+  };
+}
+
+export function selectCommanderCard(state: GameState, cardId: string): GameState | null {
+  if (state.side !== 'bear') return null;
+  const card = COMMANDER_CARDS.find((c) => c.id === cardId);
+  if (!card) return null;
+  const remaining = bearBudgetRemaining(state);
+  if (remaining < card.cost) return null;
+  return {
+    ...state,
+    bearBudget: state.bearBudget - card.cost,
+    commanderCard: cardId,
+  };
+}
+
 export function buildPlayerBearPlan(state: GameState): BearPlan {
   return {
     name: 'Player Bear Defense',
@@ -190,7 +228,16 @@ export function setIntel(
   state: GameState,
   plan: BearPlan,
 ): GameState {
-  return { ...state, phase: 'intel', plan, odds: null };
+  const train = getTrain(state.trainId);
+  const mods = activeModEffects(state);
+  const stats = composeStats(train.base, mods);
+  const flags = activeModFlags(state);
+  const target = targetKmForRound(state.round);
+  const seed = simulationSeed(state);
+  const bearUpgrades = buildBearUpgradeOverrides(state.bearUpgrades);
+  const odds = calculateOdds(stats, flags, plan.placements, target, 20, seed, state.waveModifier ?? undefined, bearUpgrades, undefined, state.side === 'bear', state.commanderCard ?? undefined);
+  const objectives = generateBonusObjectives(state, stats, target);
+  return { ...state, phase: 'intel', plan, odds, bonusObjectives: objectives };
 }
 
 // ---- RUN ----
@@ -204,6 +251,12 @@ export function finishRun(state: GameState, sim: SimResult): GameState {
   const playerWon = state.side === 'bear' ? !trainWon : trainWon;
   const targetKm = targetKmForRound(state.round);
   const reward = playerWon ? rewardForWin(state.round, sim.bearsSmashed) : rewardForLoss(sim.reachedKm);
+
+  // Check bonus objectives
+  const checkedObjectives = checkBonusObjectives(state, sim);
+  const bonusCoins = checkedObjectives
+    .filter((o) => o.completed)
+    .reduce((sum, o) => sum + o.reward, 0);
 
   const summary: RoundOutcomeSummary = {
     round: state.round,
@@ -231,12 +284,13 @@ export function finishRun(state: GameState, sim: SimResult): GameState {
     ...state,
     phase: nextPhase,
     hearts: newHearts,
-    coins: state.side === 'train' ? state.coins + reward.coins : state.coins,
+    coins: state.side === 'train' ? state.coins + reward.coins + bonusCoins : state.coins,
     points: state.side === 'train' ? state.points + reward.points : state.points,
     sim,
     lastSummary: summary,
     totalBearsSmashed: state.totalBearsSmashed + sim.bearsSmashed,
     totalKm: state.totalKm + sim.reachedKm,
+    bonusObjectives: checkedObjectives,
   };
 }
 
@@ -244,6 +298,23 @@ export function nextRound(state: GameState): GameState {
   if (!state.freeplay && state.round >= MAX_ROUNDS) return state;
   const round = state.round + 1;
   const loadout = state.side === 'bear' ? trainLoadoutForRound(round) : null;
+
+  // Roll wave modifier in freeplay
+  let waveModifier = state.waveModifier;
+  if (state.freeplay) {
+    waveModifier = rollWaveModifier(deriveSeed(state.seed, `freeplay:${round}`));
+  }
+  let bearBudget = bearBudgetForRound(round, false);
+  if (waveModifier === 'slimPickings') {
+    bearBudget = Math.floor(bearBudget * 0.75);
+  }
+
+  // Apply bear upgrades to budget
+  const budgetBonusLevel = state.bearUpgrades.warChest ?? 0;
+  if (budgetBonusLevel > 0) {
+    bearBudget = Math.floor(bearBudget * (1 + budgetBonusLevel * 0.1));
+  }
+
   return {
     ...state,
     phase: 'roundIntro',
@@ -252,10 +323,13 @@ export function nextRound(state: GameState): GameState {
     modIds: loadout?.modIds ?? state.modIds,
     customMods: state.side === 'bear' ? [] : state.customMods,
     bearPlacements: [],
-    bearBudget: bearBudgetForRound(round, false),
+    bearBudget,
     plan: null,
     odds: null,
     sim: null,
+    waveModifier,
+    bonusObjectives: [],
+    commanderCard: null,
   };
 }
 
@@ -264,17 +338,33 @@ export function dismissRoundIntro(state: GameState): GameState {
 }
 
 export function enterFreeplay(state: GameState): GameState {
+  const firstFreeplayRound = MAX_ROUNDS + 1;
+  const waveModifier = rollWaveModifier(deriveSeed(state.seed, `freeplay:${firstFreeplayRound}`));
+  let bearBudget = bearBudgetForRound(firstFreeplayRound, false);
+  if (waveModifier === 'slimPickings') {
+    bearBudget = Math.floor(bearBudget * 0.75);
+  }
+
+  // Apply bear upgrades to budget
+  const budgetBonusLevel = state.bearUpgrades.warChest ?? 0;
+  if (budgetBonusLevel > 0) {
+    bearBudget = Math.floor(bearBudget * (1 + budgetBonusLevel * 0.1));
+  }
+
   return {
     ...state,
     freeplay: true,
-    round: MAX_ROUNDS + 1,
+    round: firstFreeplayRound,
     phase: 'roundIntro',
     hearts: MAX_HEARTS,
     bearPlacements: [],
-    bearBudget: bearBudgetForRound(MAX_ROUNDS + 1, false),
+    bearBudget,
     plan: null,
     odds: null,
     sim: null,
+    waveModifier,
+    bonusObjectives: [],
+    commanderCard: null,
   };
 }
 
@@ -314,6 +404,143 @@ export function simulationSeed(state: GameState): number {
   return deriveSeed(state.seed, `round:${state.round}`);
 }
 
+// ---- BONUS OBJECTIVES ----
+
+export function generateBonusObjectives(state: GameState, stats: import('./types').TrainStats, targetKm: number): BonusObjective[] {
+  if (state.side !== 'train' && state.side !== 'bear') return [];
+  const side = state.side;
+  const objectives: BonusObjective[] = [];
+  const rng = (i: number) => deriveSeed(state.seed, `obj:${state.round}:${i}`);
+
+  const baseReward = 50 + 20 * state.round;
+
+  // Pool of possible objectives
+  const pool: (() => BonusObjective | null)[] = [];
+
+  if (side === 'train') {
+    pool.push(() => ({
+      id: `speed-${state.round}`,
+      type: 'speedTarget' as const,
+      desc: `Reach ${Math.round(stats.topSpeed * 0.8)} km/h`,
+      target: Math.round(stats.topSpeed * 0.8),
+      reward: baseReward,
+      completed: false,
+      progress: 0,
+    }));
+    pool.push(() => ({
+      id: `bears-${state.round}`,
+      type: 'bearsSmashed' as const,
+      desc: `Smash ${10 + 5 * state.round} bears`,
+      target: 10 + 5 * state.round,
+      reward: baseReward,
+      completed: false,
+      progress: 0,
+    }));
+    pool.push(() => ({
+      id: `lowdmg-${state.round}`,
+      type: 'lowDamage' as const,
+      desc: `Take less than ${Math.round(stats.maxHp * 0.3)} damage`,
+      target: Math.round(stats.maxHp * 0.3),
+      reward: baseReward + 20,
+      completed: false,
+      progress: 0,
+    }));
+    pool.push(() => ({
+      id: `fast-${state.round}`,
+      type: 'fastTime' as const,
+      desc: `Finish under ${Math.max(30, Math.round(targetKm / stats.topSpeed * 3600 * 1.2))}s`,
+      target: Math.max(30, Math.round(targetKm / stats.topSpeed * 3600 * 1.2)),
+      reward: baseReward,
+      completed: false,
+      progress: 0,
+    }));
+  } else {
+    // Bear side
+    pool.push(() => ({
+      id: `bear-bears-${state.round}`,
+      type: 'bearsSmashed' as const,
+      desc: `Let the train clear ${5 + 3 * state.round} bears`,
+      target: 5 + 3 * state.round,
+      reward: baseReward,
+      completed: false,
+      progress: 0,
+    }));
+    pool.push(() => ({
+      id: `grind-${state.round}`,
+      type: 'grindTime' as const,
+      desc: `Keep train grinding for ${5 + 2 * state.round}s`,
+      target: 5 + 2 * state.round,
+      reward: baseReward + 20,
+      completed: false,
+      progress: 0,
+    }));
+    pool.push(() => ({
+      id: `zone-${state.round}`,
+      type: 'zoneDamage' as const,
+      desc: `Deal ${100 + 50 * state.round} zone damage`,
+      target: 100 + 50 * state.round,
+      reward: baseReward + 10,
+      completed: false,
+      progress: 0,
+    }));
+  }
+
+  // Pick 2 objectives deterministically from seed
+  const indices = pool.map((_, i) => i);
+  // Simple shuffle using round seeds
+  for (let i = indices.length - 1; i > 0; i--) {
+    const j = rng(i) % (i + 1);
+    [indices[i], indices[j]] = [indices[j], indices[i]];
+  }
+
+  for (let i = 0; i < Math.min(2, pool.length); i++) {
+    const gen = pool[indices[i]];
+    const obj = gen();
+    if (obj) objectives.push(obj);
+  }
+
+  return objectives;
+}
+
+export function checkBonusObjectives(state: GameState, sim: SimResult): BonusObjective[] {
+  const trainWon = sim.outcome === 'win';
+  const playerWon = state.side === 'bear' ? !trainWon : trainWon;
+
+  return state.bonusObjectives.map((obj) => {
+    let progress = 0;
+    let completed = false;
+
+    switch (obj.type) {
+      case 'speedTarget':
+        progress = Math.round(Math.max(...sim.frames.map((f) => f.speed), 0));
+        completed = progress >= obj.target;
+        break;
+      case 'bearsSmashed':
+        progress = sim.bearsSmashed;
+        completed = progress >= obj.target;
+        break;
+      case 'lowDamage':
+        progress = Math.round(sim.damageTaken);
+        completed = progress < obj.target && playerWon;
+        break;
+      case 'fastTime':
+        progress = Math.round(sim.timeSec);
+        completed = progress <= obj.target && sim.outcome === 'win';
+        break;
+      case 'grindTime':
+        progress = Math.round(sim.frames.filter((f) => f.grinding).length * 0.5);
+        completed = progress >= obj.target;
+        break;
+      case 'zoneDamage':
+        progress = Math.round(sim.damageBreakdown.zone + sim.damageBreakdown.grind);
+        completed = progress >= obj.target;
+        break;
+    }
+
+    return { ...obj, progress, completed };
+  });
+}
+
 export type GameAction =
   | { type: 'startGame'; side: PlayerSide; seed?: Seed }
   | { type: 'buyTrain'; trainId: string }
@@ -328,6 +555,8 @@ export type GameAction =
   | { type: 'dismissRoundIntro' }
   | { type: 'placeBearUnit'; unitType: BearUnitType; atKm: number }
   | { type: 'removeBearPlacement'; index: number }
+  | { type: 'buyBearUpgrade'; upgradeId: string }
+  | { type: 'selectCommanderCard'; cardId: string }
   | { type: 'restoreGame'; state: GameState }
   | { type: 'enterFreeplay' };
 
@@ -363,5 +592,9 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return placeBearUnit(state, action.unitType, action.atKm) ?? state;
     case 'removeBearPlacement':
       return removeBearPlacement(state, action.index);
+    case 'buyBearUpgrade':
+      return buyBearUpgrade(state, action.upgradeId) ?? state;
+    case 'selectCommanderCard':
+      return selectCommanderCard(state, action.cardId) ?? state;
   }
 }

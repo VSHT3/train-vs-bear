@@ -104,10 +104,13 @@ describe('runSimulation', () => {
   });
 
   it('does not let regeneration revive a train destroyed in the same tick', () => {
+    // bearNado has 15 zoneDps per unit — with count 2 that's 30 DPS = 3 per tick
+    // 3 damage > maxHp 1, so the train dies in one tick
+    // regen 100/s = 10/tick should not revive it
     const result = runSimulation(
       { ...train, maxHp: 1, regen: 100 },
       [],
-      [{ type: 'droneSwarm', atKm: 0, count: 2 }],
+      [{ type: 'bearNado', atKm: 0, count: 2 }],
       1,
       { seed: 1, maxTimeSec: 10 },
     );

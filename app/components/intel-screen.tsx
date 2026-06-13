@@ -1,4 +1,4 @@
-import { BEAR_UNITS, getMod, getTrain, targetKmForRound } from '@/lib/catalog';
+import { BEAR_UNITS, COMMANDER_CARDS, getMod, getTrain, targetKmForRound } from '@/lib/catalog';
 import { activeModEffects } from '@/lib/state';
 import { composeStats } from '@/lib/simulate';
 import type { BearPlacement, GameState } from '@/lib/types';
@@ -95,6 +95,19 @@ export function IntelScreen({
                   {mods.map((mod) => <span key={mod.id} className="text-sm px-2.5 py-1 rounded-full bg-zinc-100 dark:bg-zinc-800">{mod.emoji} {mod.name}</span>)}
                 </div>
               )}
+              {state.commanderCard && (() => {
+                const card = COMMANDER_CARDS.find((c) => c.id === state.commanderCard);
+                return card ? (
+                  <div className="border-t border-zinc-100 dark:border-zinc-800 pt-3">
+                    <div className="text-xs text-zinc-400 font-semibold mb-1">🃏 Active Commander Card</div>
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="text-lg">{card.emoji}</span>
+                      <span className="font-medium">{card.name}</span>
+                      <span className="text-xs text-zinc-400">{card.flavor}</span>
+                    </div>
+                  </div>
+                ) : null;
+              })()}
             </div>
           ) : (
             <div className="bg-white dark:bg-zinc-900 border-2 border-zinc-200 dark:border-zinc-800 rounded-2xl p-6 space-y-3">
@@ -155,6 +168,22 @@ export function IntelScreen({
               })}
             </div>
           </div>
+
+          {/* Bonus objectives preview */}
+          {state.bonusObjectives.length > 0 && (
+            <div className="bg-white dark:bg-zinc-900 border-2 border-zinc-200 dark:border-zinc-800 rounded-2xl p-5">
+              <h4 className="text-sm font-semibold text-zinc-500 mb-3">🎯 BONUS OBJECTIVES</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {state.bonusObjectives.map((obj) => (
+                  <div key={obj.id} className="flex items-center gap-2 p-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 text-sm">
+                    <span className="text-lg">🎯</span>
+                    <span className="flex-1">{obj.desc}</span>
+                    <span className="text-xs font-bold text-amber-600 shrink-0">+{obj.reward}🪙</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="flex gap-4">
             <button onClick={onBack} className="flex-1 py-4 border-2 border-zinc-200 dark:border-zinc-700 rounded-2xl font-semibold text-lg hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors">← Back to Shop</button>

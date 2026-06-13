@@ -16,7 +16,7 @@ export function RunScreen({ state, onDone }: { state: GameState; onDone: (sim: S
         replay.modFlags,
         replay.plan.placements,
         replay.targetKm,
-        { seed: replay.simulationSeed },
+        { seed: replay.simulationSeed, waveModifier: replay.waveModifier, bearUpgrades: replay.bearUpgrades, isBearSide: replay.side === 'bear', commanderCard: state.commanderCard ?? undefined },
       ),
     };
   });

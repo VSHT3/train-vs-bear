@@ -11,7 +11,7 @@ export function ReplayScreen({ payload, onExit }: { payload: ReplayPayload; onEx
     payload.modFlags,
     payload.plan.placements,
     payload.targetKm,
-    { seed: payload.simulationSeed },
+    { seed: payload.simulationSeed, waveModifier: payload.waveModifier, bearUpgrades: payload.bearUpgrades, isBearSide: payload.side === 'bear' },
   ));
 
   return <SimulationPlayback payload={payload} result={result} replayMode onExit={onExit} />;

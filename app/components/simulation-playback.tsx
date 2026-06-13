@@ -1,8 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { BEAR_UNITS } from '@/lib/catalog';
+import { BEAR_UNITS, WAVE_MODIFIERS } from '@/lib/catalog';
 import { encodeReplay } from '@/lib/replay';
+import { runSimulation } from '@/lib/simulate';
 import { useSound } from '@/lib/sound';
 import type { ReplayPayload, SimResult } from '@/lib/types';
 
@@ -21,32 +22,36 @@ export function SimulationPlayback({
   onDone?: (sim: SimResult) => void;
   onExit?: () => void;
 }) {
+  const [currentResult, setCurrentResult] = useState(result);
   const [frameIndex, setFrameIndex] = useState(0);
   const [finished, setFinished] = useState(false);
   const [paused, setPaused] = useState(replayMode);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [copied, setCopied] = useState(false);
+  const [pendingDecision, setPendingDecision] = useState<{ decision: SimResult['decisions'][0]; makeChoice: (optionId: string) => void } | null>(null);
+  const decisionsMade = useRef<Record<number, string>>({});
   const logRef = useRef<HTMLDivElement>(null);
   const { play: playSound } = useSound();
 
-  const frame = result.frames[Math.min(frameIndex, result.frames.length - 1)];
+  const frame = currentResult.frames[Math.min(frameIndex, currentResult.frames.length - 1)];
   const progress = Math.min((frame.km / payload.targetKm) * 100, 100);
   const maxHp = payload.trainStats.maxHp;
   const hpPercent = Math.max((frame.hp / maxHp) * 100, 0);
-  const visibleEvents = result.events.filter((event) => event.t <= frame.t + 0.01);
+  const visibleEvents = currentResult.events.filter((event) => event.t <= frame.t + 0.01);
   const bearSide = payload.side === 'bear';
-  const playerWon = bearSide ? result.outcome !== 'win' : result.outcome === 'win';
+  const playerWon = bearSide ? currentResult.outcome !== 'win' : currentResult.outcome === 'win';
   const dead = frame.hp <= 0;
   const trackSpeed = payload.trainStats.topSpeed > 0 ? frame.speed / payload.trainStats.topSpeed : 0;
 
-  const eventsAtFrame = result.events.filter((e) => Math.abs(e.t - frame.t) < 0.15);
+  const eventsAtFrame = currentResult.events.filter((e) => Math.abs(e.t - frame.t) < 0.15);
   const justHit = eventsAtFrame.some((e) => e.kind === 'hit' || e.kind === 'boom');
 
   useEffect(() => {
     if (paused || finished) return;
+    if (pendingDecision) return;
     const interval = window.setInterval(() => {
       setFrameIndex((current) => {
-        if (current >= result.frames.length - 1) {
+        if (current >= currentResult.frames.length - 1) {
           setFinished(true);
           return current;
         }
@@ -54,7 +59,7 @@ export function SimulationPlayback({
       });
     }, Math.max(16, 80 / playbackSpeed));
     return () => window.clearInterval(interval);
-  }, [finished, paused, playbackSpeed, result.frames.length]);
+  }, [finished, paused, playbackSpeed, currentResult.frames.length, pendingDecision]);
 
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
@@ -76,9 +81,56 @@ export function SimulationPlayback({
   useEffect(() => {
     if (!finished || !onDone) return;
     const delay = dead ? 3000 : 1500;
-    const timeout = window.setTimeout(() => onDone(result), delay);
+    const timeout = window.setTimeout(() => onDone(currentResult), delay);
     return () => window.clearTimeout(timeout);
-  }, [finished, onDone, result, dead]);
+  }, [finished, onDone, currentResult, dead]);
+
+  // Detect pending decisions in the current frame
+  const prevFrameKm = useRef(0);
+  useEffect(() => {
+    if (pendingDecision || finished || frameIndex === 0) return;
+    if (frame.km <= prevFrameKm.current) { prevFrameKm.current = frame.km; return; }
+    prevFrameKm.current = frame.km;
+    const pending = currentResult.decisions.find(
+      (d) => d.chosenOptionId === null && frame.km >= d.atKm,
+    );
+    if (pending) {
+      const id = setTimeout(() => {
+        setPaused(true);
+        setPendingDecision({
+          decision: pending,
+          makeChoice: (optionId: string) => {
+            const newOverrides = { ...decisionsMade.current, [pending.atKm]: optionId };
+            decisionsMade.current = newOverrides;
+            try {
+              const newResult = runSimulation(
+                payload.trainStats,
+                payload.modFlags,
+                payload.plan.placements,
+                payload.targetKm,
+                {
+                  seed: payload.simulationSeed,
+                  waveModifier: payload.waveModifier,
+                  bearUpgrades: payload.bearUpgrades,
+                  decisionOverrides: newOverrides,
+                  isBearSide: payload.side === 'bear',
+                  commanderCard: (payload as { commanderCard?: string }).commanderCard,
+                },
+              );
+              setCurrentResult(newResult);
+              setFrameIndex(0);
+              setFinished(false);
+              prevFrameKm.current = 0;
+            } catch {
+              // fallback: skip decision
+            }
+            setPendingDecision(null);
+          },
+        });
+      }, 50);
+      return () => clearTimeout(id);
+    }
+  }, [frameIndex, currentResult.decisions, finished, pendingDecision, frame.km, payload]);
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
@@ -86,7 +138,7 @@ export function SimulationPlayback({
         event.preventDefault();
         setPaused((p) => !p);
       }
-      if (event.key === 'ArrowRight') setFrameIndex((i) => Math.min(i + 1, result.frames.length - 1));
+      if (event.key === 'ArrowRight') setFrameIndex((i) => Math.min(i + 1, currentResult.frames.length - 1));
       if (event.key === 'ArrowLeft') setFrameIndex((i) => Math.max(i - 1, 0));
       if (event.key === 'r') {
         setPaused(true);
@@ -96,7 +148,7 @@ export function SimulationPlayback({
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [result.frames.length]);
+  }, [currentResult.frames.length]);
 
   const shareReplay = useCallback(async () => {
     const url = new URL(window.location.href);
@@ -110,7 +162,7 @@ export function SimulationPlayback({
   const scrubTo = (nextFrame: number) => {
     setPaused(true);
     setFrameIndex(nextFrame);
-    setFinished(nextFrame >= result.frames.length - 1);
+    setFinished(nextFrame >= currentResult.frames.length - 1);
   };
 
   const hpColor = hpPercent > 50 ? 'bg-green-500' : hpPercent > 25 ? 'bg-yellow-500' : 'bg-red-500';
@@ -148,6 +200,16 @@ export function SimulationPlayback({
         </div>
       )}
 
+      {payload.waveModifier && (() => {
+        const mod = WAVE_MODIFIERS[payload.waveModifier];
+        if (!mod) return null;
+        return (
+          <div className="bg-purple-50 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-800 rounded-xl p-3 text-sm text-purple-700 dark:text-purple-300">
+            🌊 Wave modifier: <strong>{mod.emoji} {mod.name}</strong> — {mod.desc}
+          </div>
+        );
+      })()}
+
       {/* === TRACK VISUALIZATION === */}
       <div className={`bg-white dark:bg-zinc-900 border rounded-xl overflow-hidden transition-colors ${dead && finished ? 'border-red-400' : 'border-zinc-200 dark:border-zinc-800'}`}>
         {/* Speed lines */}
@@ -169,7 +231,7 @@ export function SimulationPlayback({
             }}
           >
             {/* Zone overlays */}
-            {result.obstacles.filter((o) => o.kind === 'zone').map((obs) => {
+            {currentResult.obstacles.filter((o) => o.kind === 'zone').map((obs) => {
               const startPct = (obs.km / payload.targetKm) * 100;
               const widthPct = (obs.lengthKm / payload.targetKm) * 100;
               const isActive = frame.km >= obs.km && frame.km <= obs.km + obs.lengthKm;
@@ -187,7 +249,7 @@ export function SimulationPlayback({
             })}
 
             {/* Obstacles */}
-            {result.obstacles.filter((o) => o.kind === 'blocker').map((obs) => {
+            {currentResult.obstacles.filter((o) => o.kind === 'blocker').map((obs) => {
               const passed = obs.km < frame.km;
               const cleared = obs.clearedT !== undefined;
               const current = obs.contactT !== undefined && !cleared;
@@ -226,7 +288,7 @@ export function SimulationPlayback({
           <input
             type="range"
             min="0"
-            max={Math.max(result.frames.length - 1, 0)}
+            max={Math.max(currentResult.frames.length - 1, 0)}
             value={frameIndex}
             onChange={(event) => scrubTo(Number(event.target.value))}
             className="w-full accent-zinc-900 dark:accent-zinc-100"
@@ -280,6 +342,32 @@ export function SimulationPlayback({
         </div>
       </div>
 
+      {/* === DECISION MODAL === */}
+      {pendingDecision && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setPendingDecision(null)}>
+          <div className="bg-white dark:bg-zinc-900 border-2 border-zinc-200 dark:border-zinc-800 rounded-2xl max-w-md w-full shadow-2xl p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="text-center">
+              <div className="text-4xl mb-2">⚡</div>
+              <h3 className="text-xl font-black">{pendingDecision.decision.title}</h3>
+              <p className="text-sm text-zinc-500 mt-1">The simulation awaits your command.</p>
+            </div>
+            <div className="space-y-2">
+              {pendingDecision.decision.options.map((opt) => (
+                <button
+                  key={opt.id}
+                  onClick={() => pendingDecision.makeChoice(opt.id)}
+                  className="w-full text-left p-4 rounded-xl border-2 border-zinc-200 dark:border-zinc-700 hover:border-amber-500 hover:bg-amber-50 dark:hover:bg-amber-950/20 transition-all group"
+                >
+                  <div className="font-bold text-base group-hover:text-amber-600">{opt.label}</div>
+                  <div className="text-sm text-zinc-500 mt-0.5">{opt.desc}</div>
+                </button>
+              ))}
+            </div>
+            <p className="text-[10px] text-zinc-400 text-center">This choice will affect the outcome of the run.</p>
+          </div>
+        </div>
+      )}
+
       {/* === EVENT LOG + CONTROLS === */}
       <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl flex flex-col min-h-0">
         <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-zinc-100 dark:border-zinc-800">
@@ -328,7 +416,7 @@ export function SimulationPlayback({
                 {playerWon ? (bearSide ? '🐻 DEFENSE HOLDS!' : '🚂 TRAIN BREAKS THROUGH!') : (bearSide ? '🚂 TRAIN BROKE THROUGH' : '🐻 TRAIN STOPPED')}
               </p>
               <p className="text-sm text-zinc-400 mt-1">
-                {result.reachedKm.toFixed(1)} / {result.targetKm} km · {result.timeSec}s · {result.bearsSmashed} bears cleared
+                {currentResult.reachedKm.toFixed(1)} / {currentResult.targetKm} km · {currentResult.timeSec}s · {currentResult.bearsSmashed} bears cleared
               </p>
             </div>
           )}

@@ -163,7 +163,19 @@ export function addLeaderboardEntry(entry: LeaderboardEntry): void {
   saveLeaderboard(entries);
 }
 
-export function checkAchievements(stats: LifetimeStats): AchievementId[] {
+export function checkAchievements(
+  stats: LifetimeStats,
+  context?: {
+    wonRound?: boolean;
+    damageTaken?: number;
+    trainId?: string;
+    campaignVictory?: boolean;
+    side?: 'train' | 'bear';
+    customModCount?: number;
+    heartsLostThisRun?: number;
+    gameOver?: boolean;
+  },
+): AchievementId[] {
   const newlyUnlocked: AchievementId[] = [];
   const unlocked = new Set(stats.achievements);
 
@@ -178,6 +190,16 @@ export function checkAchievements(stats: LifetimeStats): AchievementId[] {
   check('bearpocalypse', stats.totalBearsSmashed >= 1000);
   check('thousandMiler', stats.totalKm >= 1000);
   check('unstoppable', stats.bestFreeplayWave >= 10);
+
+  // Context-dependent achievements
+  if (context) {
+    check('bearlyScratch', context.wonRound === true && context.damageTaken === 0);
+    check('fullSteam', context.campaignVictory === true && context.side === 'train');
+    check('bearCommander', context.campaignVictory === true && context.side === 'bear');
+    check('doomtrain', context.wonRound === true && context.trainId === 'doomtrain');
+    check('customShop', (context.customModCount ?? 0) >= 3);
+    check('perfectionist', context.campaignVictory === true && context.heartsLostThisRun === 0);
+  }
 
   if (newlyUnlocked.length > 0) {
     stats.achievements = [...unlocked];

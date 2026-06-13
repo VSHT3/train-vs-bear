@@ -142,6 +142,27 @@ export interface ObstacleEncounter {
   damageTaken: number;
 }
 
+export interface DecisionOption {
+  id: string;
+  label: string;
+  desc: string;
+  effects: {
+    hpAdjust?: number; // heal (+) or damage (-) applied immediately
+    tempSpeedBoost?: number; // +X km/h instant speed increase
+    skipKm?: number; // shortcut: skip forward by X km
+    immediateDmg?: number; // raw damage (bypasses armor)
+    blockMassMult?: number; // multiplier on remaining blocker mass
+    zoneDpsMult?: number; // multiplier on remaining zone DPS
+  };
+}
+
+export interface SimDecision {
+  atKm: number;
+  title: string;
+  options: DecisionOption[];
+  chosenOptionId: string | null;
+}
+
 export interface SimResult {
   seed: number;
   outcome: SimOutcome;
@@ -156,6 +177,7 @@ export interface SimResult {
   finalHp: number;
   damageBreakdown: DamageBreakdown;
   obstacleEncounters: ObstacleEncounter[];
+  decisions: SimDecision[];
 }
 
 export interface ReplayTrain {
@@ -174,6 +196,9 @@ export interface ReplayPayload {
   plan: BearPlan;
   targetKm: number;
   simulationSeed: number;
+  waveModifier?: WaveModifierId;
+  bearUpgrades?: Record<string, number>;
+  commanderCard?: string;
 }
 
 export interface Odds {
@@ -192,6 +217,55 @@ export interface RoundOutcomeSummary {
   reachedKm: number;
   targetKm: number;
   bearsSmashed: number;
+}
+
+export type WaveModifierId =
+  | 'stickyStorm' | 'armoredWave' | 'dpsSurge' | 'rushHour'
+  | 'glassCannon' | 'slimPickings' | 'reinforcements' | 'mineGalore';
+
+export interface WaveModifierDef {
+  id: WaveModifierId;
+  name: string;
+  emoji: string;
+  desc: string;
+  flavor: string;
+}
+
+export interface BearUpgrade {
+  id: string;
+  name: string;
+  emoji: string;
+  desc: string;
+  cost: number;
+  maxLevel: number;
+  effects: {
+    stickinessBonus?: number;
+    massBonus?: number;
+    dpsBonus?: number;
+    mineBonus?: number;
+    mineDamageBonus?: number;
+    budgetBonus?: number;
+  };
+}
+
+export interface BonusObjective {
+  id: string;
+  type: 'speedTarget' | 'bearsSmashed' | 'lowDamage' | 'fastTime' | 'grindTime' | 'zoneDamage';
+  desc: string;
+  target: number;
+  reward: number;
+  completed: boolean;
+  progress: number;
+}
+
+export interface CommanderCard {
+  id: string;
+  name: string;
+  emoji: string;
+  desc: string;
+  flavor: string;
+  type: 'roadRepair' | 'stickyCloud' | 'emergencyMines' | 'lastStand' | 'sabotage';
+  cost: number;
 }
 
 export interface GameState {
@@ -214,4 +288,8 @@ export interface GameState {
   totalBearsSmashed: number;
   totalKm: number;
   freeplay: boolean;
+  waveModifier: WaveModifierId | null;
+  bearUpgrades: Record<string, number>; // upgrade id -> current level
+  bonusObjectives: BonusObjective[];
+  commanderCard: string | null; // chosen commander card id (bear side only)
 }

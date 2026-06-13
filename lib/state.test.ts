@@ -26,6 +26,7 @@ function result(outcome: SimResult['outcome']): SimResult {
     finalHp: outcome === 'win' ? 100 : 0,
     damageBreakdown: { impact: 100, zone: 0, grind: 0, mines: 0 },
     obstacleEncounters: [],
+    decisions: [],
   };
 }
 

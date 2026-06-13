@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { BEAR_UNITS, MAX_CUSTOM_MODS, MODS, TRAINS, getTrain, targetKmForRound } from '@/lib/catalog';
+import { BEAR_UNITS, BEAR_UPGRADES, COMMANDER_CARDS, MAX_CUSTOM_MODS, MODS, TRAINS, getTrain, targetKmForRound } from '@/lib/catalog';
 import {
   bearBudgetRemaining,
   canAffordBearUnit,
@@ -96,6 +96,8 @@ interface ShopScreenProps {
   onConfirmCustom: () => void;
   onPlaceBear: (type: BearUnitType, atKm: number) => void;
   onRemoveBear: (index: number) => void;
+  onBuyBearUpgrade?: (id: string) => void;
+  onSelectCommanderCard?: (cardId: string) => void;
   onReady: () => void;
 }
 
@@ -440,7 +442,7 @@ const ZONE_STYLES: Record<string, string> = {
   bearNado: 'bg-purple-400/25',
 };
 
-function BearShop({ state, onPlaceBear, onRemoveBear, onReady }: ShopScreenProps) {
+function BearShop({ state, onPlaceBear, onRemoveBear, onBuyBearUpgrade, onSelectCommanderCard, onReady }: ShopScreenProps) {
   const [selectedType, setSelectedType] = useState<BearUnitType>('bear');
   const [atKm, setAtKm] = useState(1.5);
   const [unitFilter, setUnitFilter] = useState<'all' | 'blocker' | 'zone'>('all');
@@ -544,6 +546,92 @@ function BearShop({ state, onPlaceBear, onRemoveBear, onReady }: ShopScreenProps
           );
         })}
       </div>
+
+      {/* Bear Upgrades */}
+      <details className="bg-white dark:bg-zinc-900 border-2 border-zinc-200 dark:border-zinc-800 rounded-2xl overflow-hidden open:pb-4">
+        <summary className="p-4 font-bold text-lg cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors select-none">
+          ⚡ Bear Upgrades
+        </summary>
+        <div className="px-4 pt-2 space-y-3">
+          {BEAR_UPGRADES.map((upgrade) => {
+            const currentLevel = state.bearUpgrades[upgrade.id] ?? 0;
+            const maxed = currentLevel >= upgrade.maxLevel;
+            const canBuy = !maxed && remaining >= upgrade.cost;
+            return (
+              <div key={upgrade.id} className="flex items-center gap-3 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/50">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <strong className="text-sm">{upgrade.name}</strong>
+                    <span className="text-xs text-zinc-400">Lv.{currentLevel}/{upgrade.maxLevel}</span>
+                  </div>
+                  <p className="text-xs text-zinc-500 mt-0.5">{upgrade.desc}</p>
+                  {!maxed && (
+                    <div className="flex gap-2 mt-1 text-xs text-zinc-500">
+                      <span className="font-semibold text-amber-600">{upgrade.cost} credits</span>
+                    </div>
+                  )}
+                </div>
+                <button
+                  disabled={!canBuy}
+                  onClick={() => onBuyBearUpgrade?.(upgrade.id)}
+                  className={`shrink-0 px-4 py-2 rounded-xl text-sm font-bold transition-colors ${
+                    maxed
+                      ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                      : canBuy
+                        ? 'bg-amber-700 text-white hover:bg-amber-800'
+                        : 'bg-zinc-200 dark:bg-zinc-700 text-zinc-400 cursor-not-allowed'
+                  }`}
+                >
+                  {maxed ? 'Maxed' : `Buy Lv.${currentLevel + 1}`}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </details>
+
+      {/* Commander Cards */}
+      <details className="bg-white dark:bg-zinc-900 border-2 border-zinc-200 dark:border-zinc-800 rounded-2xl overflow-hidden open:pb-4">
+        <summary className="p-4 font-bold text-lg cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition-colors select-none">
+          🃏 Commander Card
+        </summary>
+        <div className="px-4 pt-2 space-y-3">
+          <p className="text-xs text-zinc-400 mb-1">Pick one card for this round. Each triggers a one-time effect during the run.</p>
+          {COMMANDER_CARDS.map((card) => {
+            const selected = state.commanderCard === card.id;
+            const canAfford = remaining >= card.cost;
+            return (
+              <button
+                key={card.id}
+                disabled={!canAfford}
+                onClick={() => onSelectCommanderCard?.(card.id)}
+                className={`w-full text-left p-3 rounded-xl border-2 transition-colors ${
+                  selected
+                    ? 'border-purple-500 bg-purple-50 dark:bg-purple-950/20'
+                    : canAfford
+                      ? 'border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-800/50 hover:border-zinc-400'
+                      : 'border-zinc-200 dark:border-zinc-800 opacity-45'
+                }`}
+              >
+                <div className="flex justify-between gap-2 items-center">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">{card.emoji}</span>
+                      <strong className="text-sm">{card.name}</strong>
+                    </div>
+                    <p className="text-xs text-zinc-500 mt-0.5">{card.desc}</p>
+                    <p className="text-[10px] text-zinc-400 italic mt-0.5">&ldquo;{card.flavor}&rdquo;</p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <span className="text-sm font-semibold text-amber-600">{card.cost}cr</span>
+                    {selected && <div className="text-[10px] text-purple-500 font-semibold">Selected</div>}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </details>
 
       <button disabled={state.bearPlacements.length === 0} onClick={onReady} className="w-full py-4 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-2xl font-bold text-xl disabled:opacity-40">
         READY — Inspect Incoming Train

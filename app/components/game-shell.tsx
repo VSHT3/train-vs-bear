@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useReducer, useState, useRef } from 'react';
 import { evaluateCustomUpgrade, getBearPlan } from '@/app/actions';
-import { getMod, getTrain, MAX_HEARTS, MAX_ROUNDS, targetKmForRound } from '@/lib/catalog';
+import { getMod, getTrain, MAX_HEARTS, MAX_ROUNDS, targetKmForRound, WAVE_MODIFIERS } from '@/lib/catalog';
 import {
   activeModEffects,
   bearBudgetRemaining,
@@ -25,7 +25,9 @@ import {
   saveStats,
   type AchievementId,
 } from '@/lib/storage';
-import type { BearUnitType, Mod, PlayerSide, ReplayPayload, SimResult } from '@/lib/types';
+import type { BearUnitType, Mod, PlayerSide, ReplayPayload, SimResult, WaveModifierId } from '@/lib/types';
+import { TutorialTip, tutorialCompleted } from './tutorial-tip';
+import { EncyclopediaModal } from './encyclopedia-modal';
 import { GameOverScreen } from './game-over-screen';
 import { HowToPlayModal } from './how-to-play-modal';
 import { IntelScreen } from './intel-screen';
@@ -53,10 +55,11 @@ export function GameShell({
   const [customLoading, setCustomLoading] = useState(false);
   const [intelLoading, setIntelLoading] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
-  const [showFirstTutorial, setShowFirstTutorial] = useState(true);
+  const [showEncyclopedia, setShowEncyclopedia] = useState(false);
   const [replayDismissed, setReplayDismissed] = useState(false);
   const [showStats, setShowStats] = useState(false);
   const [showContinue, setShowContinue] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
   const [newAchievements, setNewAchievements] = useState<AchievementId[]>([]);
   const justLoaded = useRef(false);
   const { play } = useSound();
@@ -108,8 +111,18 @@ export function GameShell({
         seed: finalState.sim.seed,
       });
     }
-    const statsAfter = loadStats();
-    const unlocked = checkAchievements(statsAfter);
+    const trainWon = finalState.sim?.outcome === 'win';
+    const playerWon = finalState.side === 'bear' ? !trainWon : trainWon;
+    const campaignVictory = !finalState.freeplay && finalState.phase === 'victory';
+    const unlocked = checkAchievements(s, {
+      wonRound: playerWon,
+      damageTaken: finalState.sim?.damageTaken,
+      trainId: finalState.trainId,
+      campaignVictory,
+      side: finalState.side ?? undefined,
+      customModCount: finalState.customMods.length,
+      heartsLostThisRun: MAX_HEARTS - finalState.hearts,
+    });
     if (unlocked.length > 0) setNewAchievements(unlocked);
     deleteGame();
   }, []);
@@ -119,7 +132,7 @@ export function GameShell({
     if (saved) {
       justLoaded.current = true;
       setShowContinue(false);
-      setShowFirstTutorial(false);
+      setShowTutorial(false);
       dispatch({ type: 'restoreGame', state: saved });
     }
   };
@@ -131,9 +144,8 @@ export function GameShell({
     const s = loadStats();
     s.gamesStarted++;
     saveStats(s);
-    if (showFirstTutorial) {
-      setShowFirstTutorial(false);
-      setShowHelp(true);
+    if (!tutorialCompleted()) {
+      setShowTutorial(true);
     }
   };
 
@@ -190,7 +202,18 @@ export function GameShell({
       s.bearGames++;
     }
     saveStats(s);
-    const unlocked = checkAchievements(s);
+    // Check achievements with full context
+    const statsAfter = loadStats();
+    const campaignVictory = !current.freeplay && current.round >= MAX_ROUNDS && playerWon;
+    const unlocked = checkAchievements(statsAfter, {
+      wonRound: playerWon,
+      damageTaken: sim.damageTaken,
+      trainId: current.trainId,
+      campaignVictory,
+      side: current.side ?? undefined,
+      customModCount: current.customMods.length,
+      heartsLostThisRun: MAX_HEARTS - current.hearts,
+    });
     if (unlocked.length > 0) setNewAchievements(unlocked);
     saveGame({ ...current, sim });
   }, [play]);
@@ -242,6 +265,8 @@ export function GameShell({
               : <><span className="text-amber-500">🪙 {state.coins}</span><span className="text-purple-500">⭐ {state.points}</span></>}
             <span className="hidden sm:inline text-xs text-zinc-400">seed {state.seed}</span>
             <button onClick={() => setShowStats(true)} aria-label="Career stats" className="text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200" title="Career Stats">📊</button>
+            <button onClick={() => setShowEncyclopedia(true)} aria-label="Encyclopedia" className="text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200" title="Encyclopedia">📖</button>
+            {state.waveModifier && <WaveModifierBadge id={state.waveModifier} />}
             <button onClick={() => setShowHelp(true)} aria-label="How to play" className="text-zinc-400 hover:text-zinc-700 dark:hover:text-zinc-200">❓</button>
             <SoundToggle />
           </div>
@@ -262,7 +287,7 @@ export function GameShell({
             onContinue={showContinue ? restoreGame : undefined}
           />
         )}
-        {state.phase === 'roundIntro' && <RoundIntroScreen round={state.round} freeplay={state.freeplay} onDismiss={() => dispatch({ type: 'dismissRoundIntro' })} />}
+        {state.phase === 'roundIntro' && <RoundIntroScreen round={state.round} freeplay={state.freeplay} waveModifier={state.waveModifier} onDismiss={() => dispatch({ type: 'dismissRoundIntro' })} />}
         {state.phase === 'shop' && (
           <ShopScreen
             state={state}
@@ -279,6 +304,8 @@ export function GameShell({
             onConfirmCustom={confirmUpgrade}
             onPlaceBear={(unitType: BearUnitType, atKm: number) => dispatch({ type: 'placeBearUnit', unitType, atKm })}
             onRemoveBear={(index) => dispatch({ type: 'removeBearPlacement', index })}
+            onBuyBearUpgrade={(upgradeId) => dispatch({ type: 'buyBearUpgrade', upgradeId })}
+            onSelectCommanderCard={(cardId: string) => dispatch({ type: 'selectCommanderCard', cardId })}
             onReady={startIntel}
           />
         )}
@@ -289,7 +316,15 @@ export function GameShell({
         {state.phase === 'gameover' && <GameOverScreen state={state} onNewGame={playAgain} />}
       </main>
       {showHelp && <HowToPlayModal onClose={() => setShowHelp(false)} />}
+      {showEncyclopedia && <EncyclopediaModal onClose={() => setShowEncyclopedia(false)} />}
       {showStats && <StatsDashboard onClose={() => setShowStats(false)} />}
+
+      {showTutorial && state.phase !== 'title' && (
+        <TutorialTip
+          phase={state.phase}
+          onDismiss={() => setShowTutorial(false)}
+        />
+      )}
 
       {newAchievements.length > 0 && (
         <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-2 max-w-xs">
@@ -314,5 +349,15 @@ export function GameShell({
         </div>
       )}
     </div>
+  );
+}
+
+function WaveModifierBadge({ id }: { id: WaveModifierId }) {
+  const mod = WAVE_MODIFIERS[id];
+  if (!mod) return null;
+  return (
+    <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-950/50 text-purple-600 dark:text-purple-400" title={mod.desc}>
+      {mod.emoji} {mod.name}
+    </span>
   );
 }

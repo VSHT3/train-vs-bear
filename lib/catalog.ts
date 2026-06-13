@@ -684,3 +684,133 @@ export function planCost(
     0,
   );
 }
+
+// ---- WAVE MODIFIERS ----
+
+import type { WaveModifierDef, WaveModifierId } from './types';
+
+export const WAVE_MODIFIERS: Record<WaveModifierId, WaveModifierDef> = {
+  stickyStorm: {
+    id: 'stickyStorm', name: 'Sticky Storm', emoji: '🍯',
+    desc: 'All zones have 50% more stickiness — slowing the train to a crawl.',
+    flavor: 'The air tastes like honey. The rails taste like glue. Everything is sticky.',
+  },
+  armoredWave: {
+    id: 'armoredWave', name: 'Armored Wave', emoji: '🛡️',
+    desc: 'All blockers have 50% more mass — grinding takes much longer.',
+    flavor: 'The bears have been hitting the gym. And a steel foundry. And a tank factory.',
+  },
+  dpsSurge: {
+    id: 'dpsSurge', name: 'DPS Surge', emoji: '⚡',
+    desc: 'All damaging zones deal 30% more DPS every tick.',
+    flavor: 'Someone turned the dial to "extra uncomfortable." The bears applaud.',
+  },
+  rushHour: {
+    id: 'rushHour', name: 'Rush Hour', emoji: '🏃',
+    desc: 'Train acceleration is reduced by 25% — slow to recover after every obstacle.',
+    flavor: 'Traffic is terrible today. The bears have formed a conga line on the tracks.',
+  },
+  glassCannon: {
+    id: 'glassCannon', name: 'Glass Cannon', emoji: '💎',
+    desc: 'All damage is amplified 20% — every hit hurts more.',
+    flavor: 'Everything is more painful today. The bears are not complaining.',
+  },
+  slimPickings: {
+    id: 'slimPickings', name: 'Slim Pickings', emoji: '💸',
+    desc: 'Bear budget is reduced by 25% — fewer obstacles on the track.',
+    flavor: 'Budget cuts hit the bear military hard. The salmon industry is unaffected.',
+  },
+  reinforcements: {
+    id: 'reinforcements', name: 'Reinforcements', emoji: '📯',
+    desc: 'Every bear placement has 50% more units.',
+    flavor: 'Backup has arrived. The backup is more bears. It is always more bears.',
+  },
+  mineGalore: {
+    id: 'mineGalore', name: 'Mine Galore', emoji: '💣',
+    desc: 'Minefields have 50% more mines that deal 50% more damage each.',
+    flavor: 'Someone scattered a whole warehouse of mines. That someone was a bear.',
+  },
+};
+
+export const ALL_WAVE_MODIFIERS = Object.values(WAVE_MODIFIERS);
+
+export function rollWaveModifier(seed: number): WaveModifierId {
+  const ids: WaveModifierId[] = Object.keys(WAVE_MODIFIERS) as WaveModifierId[];
+  return ids[seed % ids.length];
+}
+
+// ---- BEAR UPGRADES ----
+
+import type { BearUpgrade } from './types';
+
+export const BEAR_UPGRADES: BearUpgrade[] = [
+  { id: 'stickyGoo', name: 'Premium Sticky Goo', emoji: '🧈', desc: 'Zone stickiness +15% per level', cost: 60, maxLevel: 3, effects: { stickinessBonus: 0.15 } },
+  { id: 'ironBears', name: 'Iron Bear Diet', emoji: '🏋️', desc: 'Blocker mass +20% per level', cost: 80, maxLevel: 3, effects: { massBonus: 0.2 } },
+  { id: 'droneUpgrade', name: 'Drone Firmware Update', emoji: '🛸', desc: 'Zone DPS +15% per level', cost: 90, maxLevel: 3, effects: { dpsBonus: 0.15 } },
+  { id: 'mineShaft', name: 'Deeper Mine Shafts', emoji: '⛏️', desc: 'Mine frequency +1/km, mine damage +20% per level', cost: 100, maxLevel: 2, effects: { mineBonus: 1, mineDamageBonus: 0.2 } },
+  { id: 'warChest', name: 'War Chest Expansion', emoji: '💰', desc: 'Bear budget +10% each round per level', cost: 120, maxLevel: 2, effects: { budgetBonus: 0.1 } },
+];
+
+// ---- COMMANDER CARDS ----
+
+import type { CommanderCard } from './types';
+
+export const COMMANDER_CARDS: CommanderCard[] = [
+  {
+    id: 'roadRepair',
+    name: 'Road Repair Crew',
+    emoji: '🛠️',
+    desc: 'When the train clears a blocker, it instantly respawns with 50% of its original mass right behind the train.',
+    flavor: 'The bears have discovered infrastructure funding. This is a problem.',
+    type: 'roadRepair',
+    cost: 120,
+  },
+  {
+    id: 'stickyCloud',
+    name: 'Sticky Airstrike',
+    emoji: '☁️',
+    desc: 'When the train enters a zone, double that zone\'s stickiness for 8 seconds.',
+    flavor: 'The bears have weaponized honey. From the sky. OSHA is crying.',
+    type: 'stickyCloud',
+    cost: 100,
+  },
+  {
+    id: 'emergencyMines',
+    name: 'Emergency Mine Drop',
+    emoji: '💣',
+    desc: 'When the train reaches 50% of the track, drop a polar minefield at its current position.',
+    flavor: 'The mine budget got approved at the last town hall meeting.',
+    type: 'emergencyMines',
+    cost: 130,
+  },
+  {
+    id: 'lastStand',
+    name: 'Last Stand',
+    emoji: '🛡️',
+    desc: 'When train speed drops below 10 km/h, add 30% mass to all remaining blockers.',
+    flavor: 'The bears have accepted their fate. They are not going quietly.',
+    type: 'lastStand',
+    cost: 90,
+  },
+  {
+    id: 'sabotage',
+    name: 'Track Sabotage',
+    emoji: '🔧',
+    desc: 'At the start of the run, reduce train top speed by 20% for the first 25 seconds.',
+    flavor: 'Someone loosened the tracks. Someone was definitely a bear.',
+    type: 'sabotage',
+    cost: 110,
+  },
+];
+
+export function buildBearUpgradeOverrides(upgrades: Record<string, number>): Record<string, number> {
+  const overrides: Record<string, number> = {};
+  for (const upgrade of BEAR_UPGRADES) {
+    const level = upgrades[upgrade.id] ?? 0;
+    if (level === 0) continue;
+    for (const [effect, value] of Object.entries(upgrade.effects)) {
+      overrides[effect] = (overrides[effect] ?? 0) + value * level;
+    }
+  }
+  return overrides;
+}

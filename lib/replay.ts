@@ -1,4 +1,4 @@
-import { BEAR_UNITS, getTrain, targetKmForRound } from './catalog';
+import { BEAR_UNITS, buildBearUpgradeOverrides, getTrain, targetKmForRound } from './catalog';
 import { activeModEffects, activeModFlags, simulationSeed } from './state';
 import { composeStats } from './simulate';
 import type {
@@ -10,6 +10,7 @@ import type {
   PlayerSide,
   ReplayPayload,
   TrainStats,
+  WaveModifierId,
 } from './types';
 
 const MAX_REPLAY_LENGTH = 16_000;
@@ -41,6 +42,9 @@ export function createReplayPayload(state: GameState): ReplayPayload {
     plan: state.plan,
     targetKm: targetKmForRound(state.round),
     simulationSeed: simulationSeed(state),
+    waveModifier: state.waveModifier ?? undefined,
+    bearUpgrades: Object.keys(state.bearUpgrades).length > 0 ? buildBearUpgradeOverrides(state.bearUpgrades) : undefined,
+    commanderCard: state.commanderCard ?? undefined,
   };
 }
 
@@ -79,6 +83,9 @@ function validateReplay(value: unknown): ReplayPayload | null {
   const plan = validatePlan(value.plan);
   if (!trainStats || !modFlags || !plan) return null;
 
+  const commanderCard = typeof value.commanderCard === 'string' && value.commanderCard.length <= 80 ? value.commanderCard : undefined;
+  const bearUpgrades = isRecord(value.bearUpgrades) ? value.bearUpgrades as Record<string, number> : undefined;
+
   return {
     version: 1,
     side: value.side as PlayerSide,
@@ -93,6 +100,9 @@ function validateReplay(value: unknown): ReplayPayload | null {
     plan,
     targetKm: value.targetKm,
     simulationSeed: value.simulationSeed,
+    waveModifier: (value.waveModifier as WaveModifierId) ?? undefined,
+    commanderCard,
+    bearUpgrades,
   };
 }
 

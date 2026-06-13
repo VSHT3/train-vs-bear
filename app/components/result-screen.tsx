@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { getTrain, MAX_ROUNDS } from '@/lib/catalog';
 import { loadStats } from '@/lib/storage';
-import type { GameState, ObstacleEncounter } from '@/lib/types';
+import type { BonusObjective, GameState, ObstacleEncounter } from '@/lib/types';
 import { CopyReplayButton } from './copy-replay-button';
 
 export function ResultScreen({ state, onNext }: { state: GameState; onNext: () => void }) {
@@ -97,6 +97,40 @@ export function ResultScreen({ state, onNext }: { state: GameState; onNext: () =
         </div>
       )}
 
+      {/* Decisions */}
+      {sim.decisions.length > 0 && (
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 space-y-3">
+          <h3 className="font-semibold text-sm text-zinc-500">MID-RUN DECISIONS</h3>
+          <div className="space-y-2">
+            {sim.decisions.map((d, i) => {
+              const chosen = d.options.find((o) => o.id === d.chosenOptionId);
+              return (
+                <div key={i} className="flex items-center gap-3 p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/30 text-sm">
+                  <span className="text-lg shrink-0">{d.title.split(' ')[0]}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium truncate">{d.title}</div>
+                    {chosen && <div className="text-xs text-zinc-400">Chose: {chosen.label}</div>}
+                  </div>
+                  <span className="text-[10px] text-zinc-400 shrink-0">at {d.atKm} km</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Bonus objectives */}
+      {state.bonusObjectives.length > 0 && (
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 space-y-3">
+          <h3 className="font-semibold text-sm text-zinc-500">BONUS OBJECTIVES</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {state.bonusObjectives.map((obj) => (
+              <BonusObjectiveCard key={obj.id} obj={obj} />
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Obstacle encounter report */}
       {sortedEncounters.length > 0 && (
         <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5 space-y-3">
@@ -106,6 +140,14 @@ export function ResultScreen({ state, onNext }: { state: GameState; onNext: () =
               <EncounterRow key={`${enc.type}-${enc.atKm}-${i}`} encounter={enc} index={i} />
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Speed graph */}
+      {sim.frames.length > 2 && (
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-5">
+          <h3 className="font-semibold text-sm text-zinc-500 mb-3">SPEED OVER TIME</h3>
+          <SpeedGraph frames={sim.frames} topSpeed={train.base.topSpeed} />
         </div>
       )}
 
@@ -181,11 +223,78 @@ function EncounterRow({ encounter, index }: { encounter: ObstacleEncounter; inde
   );
 }
 
+function BonusObjectiveCard({ obj }: { obj: BonusObjective }) {
+  const done = obj.completed;
+  const pct = obj.target > 0 ? Math.min(100, Math.round((obj.progress / obj.target) * 100)) : 0;
+  return (
+    <div className={`rounded-xl p-3 border transition-colors ${done ? 'bg-green-50 dark:bg-green-950/20 border-green-200 dark:border-green-800' : 'bg-zinc-50 dark:bg-zinc-800/20 border-zinc-200 dark:border-zinc-700'}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-medium truncate">{done ? '✅' : '🎯'} {obj.desc}</span>
+        <span className="text-xs font-bold text-amber-600 shrink-0">+{obj.reward}🪙</span>
+      </div>
+      <div className="mt-1.5 h-1.5 bg-zinc-200 dark:bg-zinc-700 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full transition-all ${done ? 'bg-green-500' : 'bg-amber-400'}`} style={{ width: `${pct}%` }} />
+      </div>
+      <div className="text-[10px] text-zinc-400 mt-0.5">{obj.progress}/{obj.target} {done ? '— Complete!' : ''}</div>
+    </div>
+  );
+}
+
 function MiniStat({ emoji, label, value }: { emoji: string; label: string; value: string }) {
   return (
     <div className="rounded-xl bg-zinc-50 dark:bg-zinc-800/20 p-2.5 text-center text-sm">
       <div className="text-xs text-zinc-400">{emoji} {label}</div>
       <div className="font-bold truncate">{value}</div>
+    </div>
+  );
+}
+
+function SpeedGraph({ frames, topSpeed }: { frames: { t: number; speed: number }[]; topSpeed: number }) {
+  const W = 320;
+  const H = 80;
+  const pad = { top: 4, right: 4, bottom: 16, left: 4 };
+  const w = W - pad.left - pad.right;
+  const h = H - pad.top - pad.bottom;
+
+  const maxT = Math.max(...frames.map((f) => f.t), 1);
+  const maxSpeed = Math.max(...frames.map((f) => f.speed), topSpeed, 1);
+
+  const points = frames.map((f, i) => {
+    const x = pad.left + (f.t / maxT) * w;
+    const y = pad.top + h - (f.speed / maxSpeed) * h;
+    return { x, y, speed: f.speed, t: f.t, first: i === 0, last: i === frames.length - 1 };
+  });
+
+  const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+
+  return (
+    <div className="w-full overflow-x-auto">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full max-w-sm" preserveAspectRatio="xMidYMid meet">
+        {/* Grid lines */}
+        {[0.25, 0.5, 0.75].map((f) => (
+          <line key={f} x1={pad.left} y1={pad.top + h * (1 - f)} x2={pad.left + w} y2={pad.top + h * (1 - f)}
+            stroke="currentColor" strokeOpacity={0.08} strokeWidth="1" />
+        ))}
+        {/* Area fill */}
+        <path d={`${pathD} L${points[points.length - 1]?.x ?? pad.left},${pad.top + h} L${points[0]?.x ?? pad.left},${pad.top + h} Z`}
+          fill="currentColor" fillOpacity="0.06" />
+        {/* Line */}
+        <path d={pathD} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+          className="text-blue-500" />
+        {/* Top speed reference line */}
+        {topSpeed > 0 && (
+          <>
+            <line x1={pad.left} y1={pad.top + h * (1 - topSpeed / maxSpeed)}
+              x2={pad.left + w} y2={pad.top + h * (1 - topSpeed / maxSpeed)}
+              stroke="currentColor" strokeOpacity={0.15} strokeWidth="1" strokeDasharray="3,3" />
+            <text x={pad.left + w - 2} y={pad.top + h * (1 - topSpeed / maxSpeed) - 2}
+              textAnchor="end" fontSize="6" fill="currentColor" fillOpacity="0.3">{Math.round(topSpeed)} km/h</text>
+          </>
+        )}
+        {/* Axis labels */}
+        <text x={pad.left} y={pad.top + h + 10} fontSize="6" fill="currentColor" fillOpacity="0.3">0s</text>
+        <text x={pad.left + w - 10} y={pad.top + h + 10} fontSize="6" fill="currentColor" fillOpacity="0.3">{maxT.toFixed(0)}s</text>
+      </svg>
     </div>
   );
 }

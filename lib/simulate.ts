@@ -1,4 +1,4 @@
-import type { BearPlacement, BearUnitType, ModFlag, ObstacleEncounter, SimEvent, SimFrame, SimObstacle, SimResult, TrainStats } from './types';
+import type { BearPlacement, BearUnitType, DecisionOption, ModFlag, ObstacleEncounter, SimDecision, SimEvent, SimFrame, SimObstacle, SimResult, TrainStats, WaveModifierId } from './types';
 import { BEAR_UNITS } from './catalog';
 import { createSeededRandom, deriveSeed, normalizeSeed, type Seed } from './random';
 
@@ -18,15 +18,33 @@ export function runSimulation(
   modFlags: ModFlag[],
   placements: BearPlacement[],
   targetKm: number,
-  options?: { maxTimeSec?: number; dt?: number; seed?: Seed },
+  options?: { maxTimeSec?: number; dt?: number; seed?: Seed; waveModifier?: WaveModifierId; bearUpgrades?: Record<string, number>; decisionOverrides?: Record<number, string>; isBearSide?: boolean; commanderCard?: string },
 ): SimResult {
   const dt = options?.dt ?? DT;
   const maxTime = options?.maxTimeSec ?? DEFAULT_MAX_SEC;
+  const waveModifier = options?.waveModifier ?? null;
+
+  // Apply wave modifiers that transform placements
+  let placementsMut = placements;
+  if (waveModifier === 'slimPickings') {
+    placementsMut = placements.map((p) => ({ ...p, count: Math.max(1, Math.ceil(p.count * 0.75)) }));
+  } else if (waveModifier === 'reinforcements') {
+    placementsMut = placements.map((p) => ({ ...p, count: Math.ceil(p.count * 1.5) }));
+  }
   const seed = normalizeSeed(options?.seed);
   const random = createSeededRandom(seed);
 
+  // Bear upgrade multipliers
+  const bearUpg = options?.bearUpgrades ?? {};
+  const upgSticky = 1 + (bearUpg.stickinessBonus ?? 0);
+  const upgMass = 1 + (bearUpg.massBonus ?? 0);
+  const upgDps = 1 + (bearUpg.dpsBonus ?? 0);
+  const upgMineFreq = bearUpg.mineBonus ?? 0;
+  const upgMineDmg = 1 + (bearUpg.mineDamageBonus ?? 0);
+
   // Build live obstacles sorted by position
-  const live: LiveObstacle[] = placements
+  const massScale = (waveModifier === 'armoredWave' ? 1.5 : 1) * upgMass;
+  const live: LiveObstacle[] = placementsMut
     .map((p, i): LiveObstacle => {
       const spec = BEAR_UNITS[p.type];
       const isBlocker = spec.kind === 'blocker';
@@ -37,7 +55,7 @@ export function runSimulation(
         lengthKm: isBlocker ? 0 : (spec.zoneLengthKm ?? 0),
         count: p.count,
         kind: spec.kind,
-        totalMass: isBlocker ? (spec.mass ?? 0) * p.count : 0,
+        totalMass: isBlocker ? (spec.mass ?? 0) * p.count * massScale : 0,
         initialCount: p.count,
         done: false,
         damageDealt: 0,
@@ -64,11 +82,35 @@ export function runSimulation(
   const encounters: ObstacleEncounter[] = [];
   const enteredZones = new Set<number>();
 
+  // Commander card
+  const commanderCard = options?.commanderCard;
+  const cardTriggered = new Set<string>();
+
+  // Mid-run decisions
+  const isBearSide = options?.isBearSide ?? false;
+  const decisionOverrides = options?.decisionOverrides ?? {};
+  const decisionPoints = isBearSide
+    ? [
+        { atKm: Math.ceil(targetKm * 0.3), type: 'surpriseAttack' as const },
+        { atKm: Math.ceil(targetKm * 0.6), type: 'holdLine' as const },
+      ]
+    : [
+        { atKm: Math.ceil(targetKm * 0.3), type: 'pathSplit' as const },
+        { atKm: Math.ceil(targetKm * 0.6), type: 'engineTrouble' as const },
+      ];
+  const decisions: SimDecision[] = [];
+  const triggeredDecisions = new Set<string>();
+
   const frames: SimFrame[] = [];
   const events: SimEvent[] = [];
   let frameTimer = 0;
 
   const hasFlag = (f: ModFlag) => modFlags.includes(f);
+  const effectiveAccel = waveModifier === 'rushHour' ? trainStats.accel * 0.75 : trainStats.accel;
+  const dmgMultiplier = waveModifier === 'glassCannon' ? 1.2 : 1;
+
+  // Sabotage card: reduce top speed by 20% for first 25s
+  const sabotageActive = commanderCard === 'sabotage';
 
   const reduceDmg = (dmg: number, isHeat = false) => {
     if (isHeat) return dmg * (1 - Math.min(Math.max(trainStats.heatShield, 0), 0.95));
@@ -152,19 +194,26 @@ export function runSimulation(
       }
 
       if (spec.zoneDps) {
-        zoneDps += spec.zoneDps * obs.count;
+        const obsDpsMult = (obs as LiveObstacle & { dpsMult?: number }).dpsMult ?? 1;
+        const dpsMult = (waveModifier === 'dpsSurge' ? 1.3 : 1) * upgDps * obsDpsMult;
+        zoneDps += spec.zoneDps * obs.count * dpsMult;
         underFire = true;
       }
       if (spec.stickiness) {
-        totalSticky += spec.stickiness * obs.count;
+        let stickyMult = (waveModifier === 'stickyStorm' ? 1.5 : 1) * upgSticky;
+        const boosted = (obs as LiveObstacle & { _stickyBoostUntil?: number })._stickyBoostUntil;
+        if (boosted && t < boosted) stickyMult *= 2;
+        totalSticky += spec.stickiness * obs.count * stickyMult;
       }
 
       // Mines (polarMinefield) — tracked per-zone
       if (spec.minesPerKm && spec.mineDamage && !hasFlag('mineSweeper')) {
+        const mineFreqMult = (waveModifier === 'mineGalore' ? 1.5 : 1) + upgMineFreq;
         const distKm = (speed / 3600) * dt;
-        const expectedHits = spec.minesPerKm * obs.count * distKm;
+        const expectedHits = spec.minesPerKm * obs.count * mineFreqMult * distKm;
         if (expectedHits > 0 && random() < expectedHits) {
-          const dmg = reduceDmg(spec.mineDamage);
+          const mineDmgMult = (waveModifier === 'mineGalore' ? 1.5 : 1) * upgMineDmg;
+          const dmg = reduceDmg(spec.mineDamage * mineDmgMult);
           hp -= dmg;
           totalDamage += dmg;
           mineDmg += dmg;
@@ -181,7 +230,7 @@ export function runSimulation(
 
     // Apply zone DPS — distribute proportionally across active zones
     if (zoneDps > 0) {
-      const dmg = zoneDps * dt;
+      const dmg = zoneDps * dt * dmgMultiplier;
       hp -= dmg;
       totalDamage += dmg;
       zoneDmg += dmg;
@@ -199,18 +248,126 @@ export function runSimulation(
       }
     }
 
+    // 1.5 Mid-run decisions
+    for (const dp of decisionPoints) {
+      const decisionKey = `${dp.type}-${dp.atKm}`;
+      if (km >= dp.atKm && !triggeredDecisions.has(decisionKey) && hp > 0) {
+        triggeredDecisions.add(decisionKey);
+        const decision = generateDecision(dp.type, dp.atKm, targetKm);
+        const chosen = decisionOverrides[dp.atKm] ?? decision.options[0].id;
+        const opt = decision.options.find((o) => o.id === chosen);
+        if (opt) {
+          decision.chosenOptionId = chosen;
+          applyDecisionEffects(opt.effects, live, km);
+          // Apply instant HP/speed changes
+          if (opt.effects.hpAdjust) {
+            hp = Math.max(0, hp + opt.effects.hpAdjust);
+            totalDamage += opt.effects.hpAdjust < 0 ? -opt.effects.hpAdjust : 0;
+          }
+          if (opt.effects.skipKm) {
+            km = Math.min(km + opt.effects.skipKm, targetKm - 0.1);
+            events.push({
+              t: Math.round(t * 10) / 10,
+              km: Math.round(km * 1000) / 1000,
+              kind: 'info',
+              text: `🕳️ ${opt.label}! ${opt.effects.skipKm > 0 ? 'Shaved distance!' : ''}`,
+            });
+          }
+          if (opt.effects.tempSpeedBoost) {
+            speed = Math.min(speed + opt.effects.tempSpeedBoost, trainStats.topSpeed);
+          }
+          if (opt.effects.immediateDmg) {
+            hp = Math.max(0, hp - opt.effects.immediateDmg);
+            totalDamage += opt.effects.immediateDmg;
+          }
+        }
+        decisions.push(decision);
+        events.push({
+          t: Math.round(t * 10) / 10,
+          km: Math.round(km * 1000) / 1000,
+          kind: 'info',
+          text: `⚡ ${decision.title} — ${opt?.label ?? 'Chose'} (${chosen === decision.options[0].id ? 'default' : 'alternate'})`,
+        });
+        // Push a frame to capture the decision state
+        maybeRecordFrame();
+      }
+    }
+
+    // 1.6 Commander card triggers
+    if (commanderCard === 'stickyCloud' && !cardTriggered.has('stickyCloud')) {
+      for (const obs of live) {
+        if (obs.done || obs.kind !== 'zone') continue;
+        if (km < obs.km || km > obs.km + obs.lengthKm) continue;
+        cardTriggered.add('stickyCloud');
+        const spec = BEAR_UNITS[obs.type];
+        (obs as LiveObstacle & { _stickyBoostUntil?: number })._stickyBoostUntil = t + 8;
+        events.push({
+          t: Math.round(t * 10) / 10,
+          km: Math.round(km * 1000) / 1000,
+          kind: 'info',
+          text: `☁️ Sticky Airstrike doubles ${spec.emoji} ${spec.name} stickiness for 8s!`,
+        });
+        break;
+      }
+    }
+
+    if (commanderCard === 'emergencyMines' && !cardTriggered.has('emergencyMines')) {
+      const halfKm = targetKm * 0.5;
+      if (km >= halfKm) {
+        cardTriggered.add('emergencyMines');
+        live.push({
+          id: live.length,
+          type: 'polarMinefield',
+          km: halfKm,
+          lengthKm: 1.2,
+          count: 1,
+          kind: 'zone',
+          totalMass: 0,
+          initialCount: 1,
+          done: false,
+          damageDealt: 0,
+        });
+        events.push({
+          t: Math.round(t * 10) / 10,
+          km: Math.round(km * 1000) / 1000,
+          kind: 'info',
+          text: '💣 Emergency Mine Drop! A fresh minefield appears at the midpoint!',
+        });
+      }
+    }
+
+    if (commanderCard === 'lastStand' && !cardTriggered.has('lastStand')) {
+      if (speed < 10 && !grinding) {
+        cardTriggered.add('lastStand');
+        for (const obs of live) {
+          if (obs.done || obs.kind !== 'blocker') continue;
+          if (obs.km < km) continue;
+          obs.totalMass = obs.totalMass * 1.3;
+        }
+        events.push({
+          t: Math.round(t * 10) / 10,
+          km: Math.round(km * 1000) / 1000,
+          kind: 'info',
+          text: '🛡️ Last Stand! Bears bulk up all remaining blockers by 30%!',
+        });
+      }
+    }
+
     // 2. Compute effective top speed (sticky reduction)
     const effectiveSticky = Math.min(totalSticky * (1 - trainStats.grip), 0.9);
-    const effectiveTopSpeed = trainStats.topSpeed * (1 - effectiveSticky);
+    let effectiveTopSpeed = trainStats.topSpeed * (1 - effectiveSticky);
+    if (sabotageActive && t < 25) {
+      effectiveTopSpeed *= 0.8;
+    }
 
     // 3. Acceleration
     if (grinding) {
       // While grinding, no acceleration — speed bleeds toward a low grind-speed floor
       const grindFloor = Math.max(effectiveTopSpeed * 0.2, 5);
-      speed = Math.max(speed - trainStats.accel * dt * 0.15, grindFloor);
+      speed = Math.max(speed - effectiveAccel * dt * 0.15, grindFloor);
     } else {
       if (speed < effectiveTopSpeed) {
-        speed = Math.min(speed + trainStats.accel * dt, effectiveTopSpeed);
+        speed = Math.min(speed + effectiveAccel * dt, effectiveTopSpeed);
       }
     }
 
@@ -312,7 +469,7 @@ export function runSimulation(
 
           if (isAcid && hasFlag('acidProof')) impact = 0;
 
-          const actual = reduceDmg(impact, isHeat && !hasFlag('acidProof'));
+          const actual = reduceDmg(impact * dmgMultiplier, isHeat && !hasFlag('acidProof'));
           hp -= actual;
           totalDamage += actual;
           impactDmg += actual;
@@ -371,7 +528,7 @@ export function runSimulation(
         let dps = spec.grindDps * remainingCount;
         if (isAcid && hasFlag('acidProof')) dps = 0;
 
-        const dmg = reduceDmg(dps * dt, isHeat && !hasFlag('acidProof'));
+        const dmg = reduceDmg(dps * dt * dmgMultiplier, isHeat && !hasFlag('acidProof'));
         hp -= dmg;
         totalDamage += dmg;
         grindDmg += dmg;
@@ -391,6 +548,31 @@ export function runSimulation(
           kind: 'clear',
           text: `🚂 Plowed through ${spec.emoji} ${spec.name} ×${grinding.initialCount}!`,
         });
+
+        // Road Repair card: respawn with 50% mass behind the train
+        if (commanderCard === 'roadRepair' && !cardTriggered.has(`roadRepair-${grinding.id}`)) {
+          cardTriggered.add(`roadRepair-${grinding.id}`);
+          const respawnKm = Math.max(km - 0.3, 0.1);
+          const respawnMass = grinding.totalMass > 0 ? grinding.totalMass : (spec.mass ?? 1) * grinding.initialCount * 0.5;
+          live.push({
+            id: live.length,
+            type: grinding.type,
+            km: respawnKm,
+            lengthKm: 0,
+            count: Math.max(1, Math.ceil(respawnMass / (spec.mass ?? 1))),
+            kind: 'blocker',
+            totalMass: respawnMass,
+            initialCount: Math.max(1, Math.ceil(respawnMass / (spec.mass ?? 1))),
+            done: false,
+            damageDealt: 0,
+          });
+          events.push({
+            t: Math.round(t * 10) / 10,
+            km: Math.round(km * 1000) / 1000,
+            kind: 'info',
+            text: `🛠️ Road Repair! ${spec.emoji} ${spec.name} respawns behind the train at ${respawnKm.toFixed(1)} km!`,
+          });
+        }
 
         grinding = null;
       }
@@ -414,7 +596,7 @@ export function runSimulation(
         kind: 'win',
         text: `🏁 Reached ${targetKm} km! The bears are defeated!`,
       });
-      return buildResult(seed, 'win', km, targetKm, t, bearsSmashed, totalDamage, hp, frames, events, live, impactDmg, zoneDmg, grindDmg, mineDmg, encounters);
+      return buildResult(seed, 'win', km, targetKm, t, bearsSmashed, totalDamage, hp, frames, events, live, impactDmg, zoneDmg, grindDmg, mineDmg, encounters, decisions);
     }
 
     // 11. Loss — destroyed
@@ -426,7 +608,7 @@ export function runSimulation(
         kind: 'fail',
         text: '💀 The train has been completely destroyed. Bears are doing a victory dance. It is not graceful.',
       });
-      return buildResult(seed, 'destroyed', km, targetKm, t, bearsSmashed, totalDamage, 0, frames, events, live, impactDmg, zoneDmg, grindDmg, mineDmg, encounters);
+      return buildResult(seed, 'destroyed', km, targetKm, t, bearsSmashed, totalDamage, 0, frames, events, live, impactDmg, zoneDmg, grindDmg, mineDmg, encounters, decisions);
     }
 
     // 12. Loss — stalled (only after 5 seconds grace to allow initial acceleration)
@@ -437,7 +619,7 @@ export function runSimulation(
         kind: 'fail',
         text: '🛑 The train has stalled. Bears consider this a win. One bear is already writing a memoir.',
       });
-      return buildResult(seed, 'stalled', km, targetKm, t, bearsSmashed, totalDamage, hp, frames, events, live, impactDmg, zoneDmg, grindDmg, mineDmg, encounters);
+      return buildResult(seed, 'stalled', km, targetKm, t, bearsSmashed, totalDamage, hp, frames, events, live, impactDmg, zoneDmg, grindDmg, mineDmg, encounters, decisions);
     }
 
     t += dt;
@@ -450,7 +632,7 @@ export function runSimulation(
     kind: 'fail',
     text: '⏰ Time ran out! The bears stalled you long enough. They are very proud.',
   });
-  return buildResult(seed, 'timeout', km, targetKm, t, bearsSmashed, totalDamage, hp, frames, events, live, impactDmg, zoneDmg, grindDmg, mineDmg, encounters);
+  return buildResult(seed, 'timeout', km, targetKm, t, bearsSmashed, totalDamage, hp, frames, events, live, impactDmg, zoneDmg, grindDmg, mineDmg, encounters, decisions);
 }
 
 function buildResult(
@@ -470,6 +652,7 @@ function buildResult(
   grindDmg = 0,
   mineDmg = 0,
   encounters: ObstacleEncounter[] = [],
+  decisions: SimDecision[] = [],
 ): SimResult {
   // Convert LiveObstacle[] to SimObstacle[] for output
   const obstacles: SimObstacle[] = live.map((o) => ({
@@ -528,6 +711,125 @@ function buildResult(
       mines: Math.round(mineDmg),
     },
     obstacleEncounters: encounters,
+    decisions,
+  };
+}
+
+// ---- MID-RUN DECISIONS ----
+
+function applyDecisionEffects(
+  effects: DecisionOption['effects'],
+  live: LiveObstacle[],
+  currentKm: number,
+) {
+  // Apply mass multiplier to remaining blockers
+  if (effects.blockMassMult && effects.blockMassMult !== 1) {
+    for (const obs of live) {
+      if (obs.done || obs.kind !== 'blocker') continue;
+      if (obs.km < currentKm) continue;
+      obs.totalMass = obs.totalMass * effects.blockMassMult;
+    }
+  }
+  // Apply DPS multiplier to remaining zones
+  if (effects.zoneDpsMult && effects.zoneDpsMult !== 1) {
+    for (const obs of live) {
+      if (obs.done || obs.kind !== 'zone') continue;
+      if (obs.km < currentKm) continue;
+      (obs as LiveObstacle & { dpsMult?: number }).dpsMult = effects.zoneDpsMult;
+    }
+  }
+}
+
+function generateDecision(
+  type: 'pathSplit' | 'engineTrouble' | 'surpriseAttack' | 'holdLine',
+  atKm: number,
+  targetKm: number,
+): SimDecision {
+  if (type === 'pathSplit') {
+    return {
+      atKm,
+      title: '🛤️ Path Split Ahead!',
+      options: [
+        {
+          id: 'shortcut',
+          label: 'Tunnel Shortcut',
+          desc: 'Take a dark tunnel — shave 5% off remaining distance but take 40 impact damage from debris.',
+          effects: { skipKm: Math.ceil(targetKm * 0.05), hpAdjust: -40 },
+        },
+        {
+          id: 'open',
+          label: 'Open Track',
+          desc: 'Stay on the main line — no shortcut, but recover 20 HP from the smooth ride.',
+          effects: { hpAdjust: 20 },
+        },
+      ],
+      chosenOptionId: null,
+    };
+  }
+  // engineTrouble
+  if (type === 'engineTrouble') {
+    return {
+      atKm,
+      title: '🔥 Engine Overheating!',
+      options: [
+        {
+          id: 'push',
+          label: 'Push Hard',
+          desc: 'Force the engine — gain 50 km/h instantly but take 60 heat damage.',
+          effects: { tempSpeedBoost: 50, immediateDmg: 60 },
+        },
+        {
+          id: 'coast',
+          label: 'Coast & Cool',
+          desc: 'Ease off — slow down by 25 km/h but repair 50 HP.',
+          effects: { tempSpeedBoost: -25, hpAdjust: 50 },
+        },
+      ],
+      chosenOptionId: null,
+    };
+  }
+
+  if (type === 'surpriseAttack') {
+    return {
+      atKm,
+      title: '🐻 Surprise Attack!',
+      options: [
+        {
+          id: 'trap',
+          label: 'Spring the Trap',
+          desc: 'Hit the train with 40 immediate damage as bears ambush from the treeline.',
+          effects: { immediateDmg: 40 },
+        },
+        {
+          id: 'reinforce',
+          label: 'Call Reinforcements',
+          desc: 'Add 40% mass to all remaining blockers — the train will grind longer.',
+          effects: { blockMassMult: 1.4 },
+        },
+      ],
+      chosenOptionId: null,
+    };
+  }
+
+  // holdLine
+  return {
+    atKm,
+    title: '💪 Hold the Line!',
+    options: [
+      {
+        id: 'fortify',
+        label: 'Fortify Defenses',
+        desc: 'Add 25% mass to all remaining blockers — every second counts.',
+        effects: { blockMassMult: 1.25 },
+      },
+      {
+        id: 'inspire',
+        label: 'Inspiring Roar',
+        desc: 'Boost all remaining zone DPS by 30% — the train will burn faster.',
+        effects: { zoneDpsMult: 1.3 },
+      },
+    ],
+    chosenOptionId: null,
   };
 }
 
@@ -540,12 +842,22 @@ export function calculateOdds(
   targetKm: number,
   runs = 20,
   seed: Seed = 'odds',
+  waveModifier?: WaveModifierId,
+  bearUpgrades?: Record<string, number>,
+  decisionOverrides?: Record<number, string>,
+  isBearSide?: boolean,
+  commanderCard?: string,
 ): { trainWinPct: number; runs: number } {
   let wins = 0;
   for (let i = 0; i < runs; i++) {
     const result = runSimulation(trainStats, modFlags, placements, targetKm, {
       maxTimeSec: 600,
       seed: deriveSeed(seed, i),
+      waveModifier,
+      bearUpgrades,
+      decisionOverrides,
+      isBearSide,
+      commanderCard,
     });
     if (result.outcome === 'win') wins++;
   }

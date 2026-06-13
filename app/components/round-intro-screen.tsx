@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { WAVE_MODIFIERS } from '@/lib/catalog';
+import type { WaveModifierId } from '@/lib/types';
 
 const ROUND_INTROS = [
   null,
@@ -26,7 +28,7 @@ const FREEPLAY_INTROS = [
   { subtitle: 'Welcome to the noise.', emoji: '📯', line: 'The bears have accepted entropy as their co-commander.' },
 ];
 
-export function RoundIntroScreen({ round, freeplay, onDismiss }: { round: number; freeplay?: boolean; onDismiss: () => void }) {
+export function RoundIntroScreen({ round, freeplay, waveModifier, onDismiss }: { round: number; freeplay?: boolean; waveModifier?: WaveModifierId | null; onDismiss: () => void }) {
   const [visible, setVisible] = useState(false);
   const [emojiVisible, setEmojiVisible] = useState(false);
 
@@ -35,6 +37,8 @@ export function RoundIntroScreen({ round, freeplay, onDismiss }: { round: number
     const t2 = setTimeout(() => setVisible(true), 300);
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
+
+  const modifier = waveModifier ? WAVE_MODIFIERS[waveModifier] : null;
 
   if (freeplay) {
     const wave = round - 7;
@@ -56,6 +60,15 @@ export function RoundIntroScreen({ round, freeplay, onDismiss }: { round: number
           <p className="text-xl text-zinc-500 dark:text-zinc-400 max-w-md italic">&ldquo;{intro.subtitle}&rdquo;</p>
           <p className="text-sm text-zinc-400 max-w-sm">{intro.line}</p>
           <p className="text-xs text-zinc-500">{8 + 6 * (round - 1)} km · {380 + 360 * (round - 1)} credits</p>
+          {modifier && (
+            <div className="bg-purple-50 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-800 rounded-2xl p-4 text-left max-w-sm mx-auto">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-lg">{modifier.emoji}</span>
+                <span className="font-bold text-sm text-purple-700 dark:text-purple-300">{modifier.name}</span>
+              </div>
+              <p className="text-xs text-purple-600 dark:text-purple-400 italic">&ldquo;{modifier.flavor}&rdquo;</p>
+            </div>
+          )}
         </div>
         <button onClick={onDismiss} className="px-10 py-4 bg-purple-600 hover:bg-purple-500 text-white rounded-2xl text-xl font-bold hover:scale-105 hover:shadow-xl transition-all active:scale-[0.98]">
           DEPLOY →
@@ -80,6 +93,15 @@ export function RoundIntroScreen({ round, freeplay, onDismiss }: { round: number
         <h2 className="text-5xl font-black tracking-tighter">Round {round}</h2>
         <p className="text-xl text-zinc-500 dark:text-zinc-400 max-w-md italic">&ldquo;{intro.subtitle}&rdquo;</p>
         <p className="text-sm text-zinc-400 max-w-sm">{intro.line}</p>
+        {modifier && (
+          <div className="bg-purple-50 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-800 rounded-2xl p-3 max-w-sm mx-auto">
+            <div className="flex items-center gap-2">
+              <span className="text-lg">{modifier.emoji}</span>
+              <span className="font-bold text-sm text-purple-700 dark:text-purple-300">{modifier.name}</span>
+            </div>
+            <p className="text-xs text-purple-600 dark:text-purple-400 mt-0.5">{modifier.desc}</p>
+          </div>
+        )}
       </div>
       <button onClick={onDismiss} className="px-10 py-4 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-2xl text-xl font-bold hover:scale-105 hover:shadow-xl transition-all active:scale-[0.98]">
         LET&apos;S GO →
